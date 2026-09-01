@@ -36,6 +36,55 @@ body {
 }
 h1 { font-size: 28px; letter-spacing: -0.03em; margin: 0 0 8px; }
 .lead { color: var(--muted); margin: 0 0 22px; line-height: 1.45; }
+.home-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -6px 0 22px;
+}
+.home-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+.home-link--github {
+  width: 2.9em;
+  height: 2.9em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 0.4em;
+  background: var(--card);
+}
+.home-link--github svg {
+  width: 1.35em;
+  height: 1.35em;
+}
+.home-link--github:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.home-link--omarchy {
+  height: 2.9em;
+  padding: 0 1em;
+  background: #7aa2f7;
+  color: #1a1b26;
+  border-radius: 0.4em;
+  font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow:
+    0 1px 0 0 rgba(0, 0, 0, 0.1),
+    0 0.2em 1.2em -0.4em rgba(0, 0, 0, 0.2),
+    0 0.4em 2em -0.8em rgba(0, 0, 0, 0.3);
+  transition: background 0.15s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.home-link--omarchy:hover {
+  background: #b4f9f8;
+}
 .card {
   background: var(--card);
   border: 1px solid var(--line);
