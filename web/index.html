@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0d10">
+<title>Parent Approve</title>
+<link rel="stylesheet" href="/app.css">
+<body>
+  <main class="wrap">
+    <section id="home" class="hidden">
+      <div class="eyebrow">Omarchy</div>
+      <h1>Parent Approve</h1>
+      <p class="lead">Scan the QR on the laptop. This page is only useful when the laptop is waiting.</p>
+    </section>
+
+    <section id="unsupported" class="hidden">
+      <div class="eyebrow">Parent Approve</div>
+      <h1>Phone too old</h1>
+      <p class="lead">This browser cannot do Ed25519. Use Safari 17+, Chrome 113+, or Firefox 129+.</p>
+    </section>
+
+    <section id="pair" class="hidden">
+      <div class="eyebrow">Pair this phone</div>
+      <h1>Become a parent</h1>
+      <p class="lead">A key stays on this phone. The laptop only stores the public half. Scanning a QR later is not enough — this pairing is.</p>
+      <form id="pair-form">
+        <label class="meta" for="device-name">Name this phone</label>
+        <input id="device-name" maxlength="40" required>
+        <div id="pair-err"></div>
+        <div class="row"><button class="primary" id="pair-btn" type="submit">Pair</button></div>
+      </form>
+    </section>
+
+    <section id="pair-wait" class="hidden">
+      <div class="eyebrow">Confirm on the laptop</div>
+      <h1>Same code?</h1>
+      <p class="lead">The laptop should be showing this number. If it isn’t, cancel — someone else is on the Wi-Fi.</p>
+      <div class="card"><div class="sas" id="sas"></div></div>
+    </section>
+
+    <section id="pair-done" class="hidden">
+      <div class="banner ok">This phone is a parent on <strong id="paired-host"></strong>.</div>
+      <p class="lead">Next time the kid needs sudo, scan the QR on the laptop and tap Approve.</p>
+    </section>
+
+    <section id="approve" class="hidden">
+      <div class="eyebrow" id="host">laptop</div>
+      <h1>Approve access?</h1>
+      <p class="meta" id="who"></p>
+      <div class="card">
+        <div class="match" id="match">•••<small>MATCH THE LAPTOP</small></div>
+      </div>
+      <div class="cmd" id="cmd"></div>
+      <div id="unpaired" class="banner warn hidden">This phone is not a parent for that laptop. Pairing is the security boundary — scanning is not enough.</div>
+      <div id="approve-err"></div>
+      <p class="countdown" id="countdown"></p>
+      <div class="row" id="actions">
+        <button class="deny" id="deny-btn" type="button">Deny</button>
+        <button class="approve" id="approve-btn" type="button">Approve</button>
+      </div>
+    </section>
+
+    <section id="result" class="hidden">
+      <div class="banner ok" id="result-text">Done.</div>
+    </section>
+
+    <section id="gone" class="hidden">
+      <div class="eyebrow">Parent Approve</div>
+      <h1>That request is gone</h1>
+      <p class="lead">It was approved, denied, or it expired. Ask the kid to try again.</p>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

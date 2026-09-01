@@ -1,0 +1,26 @@
+[Unit]
+Description=Omarchy parent-approve daemon
+Documentation=file:///usr/share/doc/omarchy-qr-sudo/README.md
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=10
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/omarchy-qr-sudo daemon
+Restart=on-failure
+RestartSec=1
+User=root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+RuntimeDirectory=omarchy-qr-sudo
+RuntimeDirectoryMode=0755
+StateDirectory=omarchy-qr-sudo
+StateDirectoryMode=0700
+# Do not list optional paths in ReadWritePaths. ProtectSystem=strict bind-mounts
+# every ReadWritePath; a missing /var/lib/ufw makes the unit die 226/NAMESPACE
+# before the binary runs.
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

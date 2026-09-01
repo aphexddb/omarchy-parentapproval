@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "parent.approve",
+  "name": "Parent Approve",
+  "version": "0.1.0",
+  "author": "omarchy-qr-sudo",
+  "description": "QR overlay shown while a kid waits for a parent phone to approve sudo",
+  "homepage": "https://github.com/gardiner/omarchy-qr-sudo",
+  "license": "MIT",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Panel.qml"
+  }
+}
