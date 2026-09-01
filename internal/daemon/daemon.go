@@ -724,7 +724,7 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 	case path == "/" || path == "/index.html":
 		d.writeWeb(w, "index.html")
 		return
-	case path == "/app.js" || path == "/app.css":
+	case path == "/app.js" || path == "/app.css" || path == "/nacl.min.js" || path == "/sha256.min.js":
 		d.writeWeb(w, strings.TrimPrefix(path, "/"))
 		return
 	default:

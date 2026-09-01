@@ -25,9 +25,9 @@ function concatNul(parts) {
   return buf;
 }
 
-async function cmdHash(user, service, cwd, cmd) {
-  const digest = await crypto.subtle.digest("SHA-256", concatNul([user, service, cwd, cmd]));
-  return b64url(new Uint8Array(digest));
+function cmdHash(user, service, cwd, cmd) {
+  const digest = Uint8Array.from(sha256.array(concatNul([user, service, cwd, cmd])));
+  return b64url(digest);
 }
 
 function canonical(decision, req, hash) {
@@ -82,17 +82,26 @@ async function loadRecord(hostId) {
   });
 }
 
-async function hasEd25519() {
-  try {
-    const k = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-    return !!k;
-  } catch {
-    return false;
-  }
+function hasSign() {
+  return typeof nacl !== "undefined" && nacl.sign && typeof sha256 !== "undefined";
 }
 
-async function importPrivate(jwk) {
-  return crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, true, ["sign"]);
+function newKeyPair() {
+  return nacl.sign.keyPair();
+}
+
+function signCanonical(secretKey, msg) {
+  return nacl.sign.detached(msg, secretKey);
+}
+
+function newDeviceId() {
+  if (globalThis.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
 function deviceNameGuess() {
@@ -105,7 +114,7 @@ function deviceNameGuess() {
 
 async function boot() {
   const path = location.pathname.replace(/\/+$/, "");
-  if (!(await hasEd25519())) {
+  if (!hasSign()) {
     show("unsupported");
     return;
   }
@@ -125,10 +134,10 @@ async function bootPair(sid) {
     e.preventDefault();
     $("pair-btn").disabled = true;
     try {
-      const pairKey = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-      const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", pairKey.publicKey));
-      const jwk = await crypto.subtle.exportKey("jwk", pairKey.privateKey);
-      const deviceId = crypto.randomUUID();
+      const pairKey = newKeyPair();
+      const rawPub = pairKey.publicKey;
+      const secretB64 = b64url(pairKey.secretKey);
+      const deviceId = newDeviceId();
       const name = $("device-name").value.trim() || deviceNameGuess();
       const res = await fetch("/pair/" + sid, {
         method: "POST",
@@ -152,7 +161,7 @@ async function bootPair(sid) {
         host_id: done.host_id,
         host_name: done.host_name,
         device_id: done.device_id,
-        jwk,
+        secret: secretB64,
       });
       $("paired-host").textContent = done.host_name;
       show("pair-done");
@@ -203,8 +212,8 @@ async function bootApprove(rid) {
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
     try {
-      const priv = await importPrivate(rec.jwk);
-      const sig = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, priv, canonical(decision, req, hash)));
+      if (!rec.secret) throw new Error("This phone's key is from an older build. Pair again from the laptop.");
+      const sig = signCanonical(b64urlToBytes(rec.secret), canonical(decision, req, hash));
       const posted = await fetch("/a/" + rid + "/decision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

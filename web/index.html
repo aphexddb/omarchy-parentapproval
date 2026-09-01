@@ -16,8 +16,8 @@
 
     <section id="unsupported" class="hidden">
       <div class="eyebrow">Parent Approve</div>
-      <h1>Phone too old</h1>
-      <p class="lead">This browser cannot do Ed25519. Use Safari 17+, Chrome 113+, or Firefox 129+.</p>
+      <h1>Could not load crypto</h1>
+      <p class="lead">The signing library failed to load. Reload the page on the same Wi-Fi as the laptop.</p>
     </section>
 
     <section id="pair" class="hidden">
@@ -71,6 +71,8 @@
       <p class="lead">It was approved, denied, or it expired. Ask the kid to try again.</p>
     </section>
   </main>
+  <script src="/nacl.min.js"></script>
+  <script src="/sha256.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

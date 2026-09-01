@@ -4,3 +4,8 @@ bin/
 /src/
 *.pkg.tar.zst
 *.pkg.tar.xz
+/Checking
+/Entering
+/Extracting
+/Retrieving
+/tmp-omarchy-qr-sudo-nft.txt
