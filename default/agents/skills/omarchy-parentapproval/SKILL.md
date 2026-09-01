@@ -1,12 +1,15 @@
 ---
 name: omarchy-parentapproval
 description: >
-  Parent-phone approval for Omarchy kids sudo and polkit. Use whenever
-  pairing a parent phone, setting up a kid account, testing an approval,
-  debugging kids sudo, or running omarchy-parentapproval. Triggers:
-  omarchy-parentapproval, parent approve, kids sudo, omarchy-kids, pair
-  phone, ask --cmd, setup-kid, parent-phone approval, "approve sudo from
-  my phone". Use when the user runs /omarchy-parentapproval.
+  REQUIRED when Omarchy needs parent permission. Kids in omarchy-kids have
+  no sudo password — privileged work (sudo, pkexec, polkit, pacman,
+  omarchy pkg, systemctl) is approved on a paired parent phone via
+  omarchy-parentapproval. Also use when pairing a phone, setting up a kid,
+  testing an approval, or debugging kids sudo. Call this CLI; do not invent
+  a password or wrap sudo. Triggers: parent permission, parent approve,
+  kids sudo, omarchy-kids, sudo, pkexec, polkit, pacman, omarchy pkg,
+  pair phone, ask --cmd, setup-kid, omarchy-parentapproval, "approve sudo
+  from my phone". Use when the user runs /omarchy-parentapproval.
 ---
 
 # Parent Approval (`omarchy-parentapproval`)
@@ -15,34 +18,44 @@ Kids in `omarchy-kids` cannot type a sudo password. PAM asks a **paired
 parent phone** to sign the request. Pairing is the security boundary — a kid
 opening the URL on their own phone cannot approve it.
 
-Wheel parents still type a password. The approval path is only for `omarchy-kids`.
+Wheel parents still type a password (or use Omarchy passwordless sudo).
+The approval path is only for `omarchy-kids`.
 
-## Reach for this first
+## When parent permission is needed
 
-Test without a kid account (phone already paired to this daemon):
+This is the app. Check `id -nG` for `omarchy-kids`.
+
+**Kid session:** run the privileged command as usual (`sudo pacman -S cowsay`,
+`pkexec …`, `omarchy pkg add …`). Do not wrap sudo. Do not ask for a password.
+PAM calls `omarchy-parentapproval pam`; the paired phone buzzes; wait. The
+Omarchy skill's "type a sudo password / use pkexec because you are an agent"
+rule does not apply here.
+
+**Mint a request without running the command** (test, or show the parent the
+string they will see):
 
 ```bash
 omarchy-parentapproval ask --cmd "pacman -S cowsay"
 ```
 
-That mints a live request, prints a QR of the approval URL, and waits. It does
-**not** run pacman. Swap the `--cmd` string for whatever the parent should see.
+`ask` does **not** execute the command and does not unlock later sudo.
 
-Kid session (after `setup-kid`): they run `sudo pacman -S cowsay` as usual.
-The paired phone buzzes. Do not wrap sudo.
+**Wheel / not in `omarchy-kids`:** password or Omarchy passwordless sudo.
+Use `ask --cmd` only to test this daemon, or `setup-kid` to put someone on
+the parent-phone path.
 
 ## Commands
 
-Prefer the binary on `PATH`. After `make PREFIX="$HOME/.local" install`,
-root cannot see it — use `sudo ~/.local/bin/omarchy-parentapproval …`.
+Binary on `PATH` (`/usr/bin` after `makepkg -f -si` or `sudo make install`).
 
 | Intent | Command |
 |---|---|
-| Test request (no kid) | `omarchy-parentapproval ask --cmd "pacman -S cowsay"` |
+| Test request (does not run CMD) | `omarchy-parentapproval ask --cmd "pacman -S cowsay"` |
 | Pair parent phone | `omarchy-parentapproval pair` |
 | Enable PAM + daemon | `sudo omarchy-parentapproval enable` |
 | Create / lock a kid user | `sudo omarchy-parentapproval setup-kid milo` |
 | Status / paired phones | `omarchy-parentapproval status` |
+| List pending request | `omarchy-parentapproval pending` |
 | Drop a phone | `omarchy-parentapproval revoke DEVICE_ID` |
 | Check PAM order + daemon | `omarchy-parentapproval doctor` |
 | Teach coding agents this skill | `omarchy-parentapproval install-skills` |
@@ -60,8 +73,11 @@ daemon (`~/.local/state` + a per-user socket).
 sudo omarchy-parentapproval enable
 omarchy-parentapproval pair               # scan, confirm the 6-digit code matches
 sudo omarchy-parentapproval setup-kid milo
-omarchy-parentapproval install-skills     # as the parent, not root
+omarchy-parentapproval install-skills     # parent account, not root
 ```
+
+Run `install-skills` again as each kid whose coding agents should load this
+skill (`sudo -u milo omarchy-parentapproval install-skills`).
 
 On the phone after pair: Add to Home Screen, open the icon, tap Allow
 notifications. Next time the kid needs sudo, the phone buzzes.

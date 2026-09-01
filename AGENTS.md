@@ -2,8 +2,10 @@
 
 Parent-phone approval for Omarchy kids sudo.
 
-Read [`default/agents/skills/omarchy-parentapproval/SKILL.md`](default/agents/skills/omarchy-parentapproval/SKILL.md)
-before using or changing the CLI. That skill is what coding agents should load.
+Coding agents on Omarchy that need parent permission must load
+[`default/agents/skills/omarchy-parentapproval/SKILL.md`](default/agents/skills/omarchy-parentapproval/SKILL.md)
+and call `omarchy-parentapproval`. Read that skill before using or changing
+the CLI.
 
 ```bash
 omarchy-parentapproval ask --cmd "pacman -S cowsay"
