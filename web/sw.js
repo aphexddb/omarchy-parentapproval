@@ -6,6 +6,13 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.mode === "navigate" || url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/app.js" || url.pathname === "/sw.js") {
+    event.respondWith(fetch(event.request, { cache: "no-store" }));
+  }
+});
+
 self.addEventListener("push", (event) => {
   let data = { title: "Parent Approval", body: "A kid needs sudo", url: "/" };
   if (event.data) {

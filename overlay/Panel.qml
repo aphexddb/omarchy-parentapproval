@@ -12,12 +12,14 @@ Item {
   property var shell: null
   property var manifest: null
   property bool opened: false
+  property string kind: "ask"
   property string user: ""
   property string cmd: ""
   property string match: ""
   property var qrRows: []
   property int qrSize: 0
   property string error: ""
+  readonly property bool pairing: root.kind === "pair"
 
   readonly property color onScrim: "white"
   readonly property color onScrimDim: Qt.rgba(1, 1, 1, 0.55)
@@ -26,6 +28,7 @@ Item {
   function applyPayload(payloadJson) {
     var payload = {}
     try { payload = JSON.parse(payloadJson || "{}") || {} } catch (e) { return }
+    if (payload.kind) root.kind = String(payload.kind)
     if (payload.user) root.user = String(payload.user)
     if (payload.cmd) root.cmd = String(payload.cmd)
     if (payload.match) root.match = String(payload.match)
@@ -38,8 +41,12 @@ Item {
   function open(payloadJson) {
     applyPayload(payloadJson)
     root.opened = true
-    refresh()
-    poll.running = true
+    if (root.pairing) {
+      poll.running = false
+    } else {
+      refresh()
+      poll.running = true
+    }
     Qt.callLater(function() {
       if (root.opened) keyCatcher.forceActiveFocus()
     })
@@ -53,6 +60,7 @@ Item {
     root.match = ""
     root.user = ""
     root.cmd = ""
+    root.kind = "ask"
     root.error = ""
   }
 
@@ -84,6 +92,7 @@ Item {
         if (!text) return
         try {
           var data = JSON.parse(text)
+          if (root.pairing) return
           if (!data.rid) {
             if (root.opened) root.dismiss()
             return
@@ -132,7 +141,7 @@ Item {
       width: Style.space(320)
 
       Text {
-        text: (root.user || "Kid").toUpperCase() + " WANTS TO RUN"
+        text: root.pairing ? "SCAN TO PAIR" : ((root.user || "Kid").toUpperCase() + " WANTS TO RUN")
         color: root.onScrimDim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -142,7 +151,7 @@ Item {
       }
 
       Text {
-        text: root.cmd
+        text: root.pairing ? "Parent phone only — not the kid's." : root.cmd
         color: root.onScrim
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -179,7 +188,7 @@ Item {
       }
 
       Text {
-        text: "MATCH  " + (root.match || "•••")
+        text: (root.pairing ? "CODE  " : "MATCH  ") + (root.match || "•••")
         color: "#f5c542"
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
@@ -188,7 +197,9 @@ Item {
       }
 
       Text {
-        text: "Approve on a paired parent phone. This is not a password."
+        text: root.pairing
+          ? "The phone must show the same code. This is not a password."
+          : "Approve on a paired parent phone. This is not a password."
         color: root.onScrimDim
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall

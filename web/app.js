@@ -184,6 +184,8 @@ function deviceNameGuess() {
 function isStandalone() {
   return (
     window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    window.matchMedia("(display-mode: minimal-ui)").matches ||
     window.navigator.standalone === true
   );
 }
@@ -244,14 +246,7 @@ async function enableNotifications(hostId, deviceId, msgEl) {
     if (msgEl) banner(msgEl, kind, text);
   };
   if (pushNeedsStandalone()) {
-    show("a2hs");
-    $("a2hs-done").onclick = () => {
-      if (isStandalone()) {
-        enableNotifications(hostId, deviceId, msgEl);
-      } else {
-        show("a2hs");
-      }
-    };
+    wireA2HS([]);
     return;
   }
   if (!("Notification" in window) || !("PushManager" in window)) {
@@ -321,25 +316,36 @@ function showGone() {
   };
 }
 
+function wireA2HS(recs) {
+  show("a2hs");
+  $("a2hs-done").onclick = () => {
+    if (isStandalone()) {
+      showNotifySetup(recs || []);
+      return;
+    }
+    banner($("a2hs-msg"), "warn", "Still Safari. Leave it and open the Parent Approval icon on the Home Screen.");
+  };
+}
+
 async function resumePaired() {
   settleHomeURL();
+  if (isStandalone() && !notificationsGranted()) {
+    showNotifySetup([]);
+  }
   const recs = await hydrateRecords();
   if (isStandalone() && !notificationsGranted()) {
     showNotifySetup(recs);
     return;
   }
   if (pushNeedsStandalone()) {
-    show("a2hs");
-    $("a2hs-done").onclick = () => {
-      if (isStandalone()) {
-        showNotifySetup(recs);
-      } else {
-        show("a2hs");
-      }
-    };
+    wireA2HS(recs);
     return;
   }
   show("home");
+  if (isStandalone() && !notificationsGranted()) {
+    showNotifySetup(recs);
+    return;
+  }
   if (!recs.length) return;
   $("home-paired").classList.remove("hidden");
   $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
@@ -437,20 +443,14 @@ async function bootPair(sid) {
           },
         ]);
       } else if (pushNeedsStandalone()) {
-        show("a2hs");
-        $("a2hs-done").onclick = () => {
-          if (isStandalone()) {
-            showNotifySetup([
-              {
-                host_id: done.host_id,
-                host_name: done.host_name,
-                device_id: done.device_id,
-              },
-            ]);
-          } else {
-            show("a2hs");
-          }
-        };
+        wireA2HS([
+          {
+            host_id: done.host_id,
+            host_name: done.host_name,
+            device_id: done.device_id,
+            secret: secretB64,
+          },
+        ]);
       } else {
         show("pair-done");
         wireNotifyButton($("notify-btn"), done.host_id, done.device_id, $("notify-msg"));
@@ -530,3 +530,14 @@ async function bootApprove(rid) {
 }
 
 boot();
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted) boot();
+});
+window.addEventListener("focus", () => {
+  if (isStandalone() && !notificationsGranted()) {
+    const open = document.querySelector("section:not(.hidden)");
+    if (open && (open.id === "home" || open.id === "a2hs" || open.id === "pair-done")) {
+      resumePaired();
+    }
+  }
+});

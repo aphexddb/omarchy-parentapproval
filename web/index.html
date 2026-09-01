@@ -71,16 +71,18 @@
 
     <section id="a2hs" class="hidden">
       <div class="eyebrow">Add to Home Screen</div>
-      <h1>One more step</h1>
-      <p class="lead">iPhone and iPad only deliver push from a Home Screen icon.</p>
+      <h1>Open the icon</h1>
+      <p class="lead">Safari cannot enable notifications. Add this page to your Home Screen, leave Safari, and open the Parent Approval icon. That app asks you to Allow — not a pairing code.</p>
       <div class="card coach">
         <ol>
-          <li>Tap the <strong>Share</strong> button</li>
-          <li>Tap <strong>Add to Home Screen</strong></li>
-          <li>Open the new icon, then tap Allow notifications</li>
+          <li>Tap <strong>Share</strong> → <strong>Add to Home Screen</strong></li>
+          <li>Leave Safari</li>
+          <li>Open the <strong>Parent Approval</strong> icon</li>
+          <li>Tap <strong>Allow notifications</strong></li>
         </ol>
       </div>
-      <div class="row"><button class="primary" id="a2hs-done" type="button">I added it</button></div>
+      <div id="a2hs-msg"></div>
+      <div class="row"><button class="primary" id="a2hs-done" type="button">I opened the icon</button></div>
     </section>
 
     <section id="approve" class="hidden">
@@ -113,6 +115,6 @@
   </main>
   <script src="/nacl.min.js"></script>
   <script src="/sha256.min.js"></script>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=22"></script>
 </body>
 </html>

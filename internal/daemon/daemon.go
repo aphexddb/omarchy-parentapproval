@@ -930,7 +930,8 @@ func (d *Daemon) writeWeb(w http.ResponseWriter, name string) {
 		ctype = "image/svg+xml"
 	}
 	w.Header().Set("Content-Type", ctype)
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	_, _ = w.Write(raw)
 }
 

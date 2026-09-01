@@ -44,12 +44,34 @@ func TestOverlayPayloadIncludesMatch(t *testing.T) {
 	if m["match"] != "515" {
 		t.Fatalf("match=%v", m["match"])
 	}
+	if m["kind"] != "ask" {
+		t.Fatalf("kind=%v", m["kind"])
+	}
 	if m["cmd"] != "ping" || m["user"] != "gardiner" {
 		t.Fatalf("payload %+v", m)
 	}
 	matrix, ok := m["matrix"].([]any)
 	if !ok || len(matrix) < 21 {
 		t.Fatalf("matrix %+v", m["matrix"])
+	}
+}
+
+func TestOverlayPayloadPairKind(t *testing.T) {
+	got, err := overlayPayload(map[string]any{
+		"kind":   "pair",
+		"cmd":    "Pair a parent phone",
+		"match":  "515151",
+		"qr_url": "https://parentapprovals.com/p/abc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["kind"] != "pair" || m["match"] != "515151" {
+		t.Fatalf("payload %+v", m)
 	}
 }
 
@@ -149,6 +171,7 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 	for _, want := range []string{
 		"function applyPayload",
 		"root.match = String(payload.match)",
+		`root.kind === "pair"`,
 		`command: ["/usr/bin/parentapproval", "pending", "--json"]`,
 	} {
 		if !strings.Contains(s, want) {

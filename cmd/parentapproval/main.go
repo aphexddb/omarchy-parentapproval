@@ -268,6 +268,14 @@ func cmdPair(args []string) error {
 		return err
 	}
 	fmt.Println(box)
+	presentDisplay(map[string]any{
+		"kind":   "pair",
+		"user":   "",
+		"cmd":    "Pair a parent phone",
+		"match":  sas,
+		"qr_url": url,
+	})
+	defer dismissDisplay()
 	if via != "relay" {
 		listen, _ := started["listen"].(string)
 		if listen != "" {
@@ -278,6 +286,7 @@ func cmdPair(args []string) error {
 	fmt.Println("Waiting for a phone…  Ctrl-C to abort.")
 
 	onInterrupt(func() {
+		dismissDisplay()
 		_, _ = daemon.PairAbort(p.socket, sid)
 	})
 
@@ -300,7 +309,7 @@ func cmdPair(args []string) error {
 				return err
 			}
 			fmt.Printf("Paired %q.\n", name)
-			fmt.Println("On the phone: Add to Home Screen, open the icon, tap Allow notifications.")
+			fmt.Println("On the phone: leave Safari, open the Home Screen icon, tap Allow notifications.")
 			_ = done
 			return nil
 		case "done":
@@ -582,7 +591,12 @@ func overlayPayload(created map[string]any) (string, error) {
 	if err != nil {
 		matrix = nil
 	}
+	kind, _ := created["kind"].(string)
+	if kind == "" {
+		kind = "ask"
+	}
 	b, err := json.Marshal(map[string]any{
+		"kind":   kind,
 		"cmd":    created["cmd"],
 		"user":   created["user"],
 		"match":  created["match"],
@@ -600,9 +614,12 @@ func presentDisplay(created map[string]any) {
 		return
 	}
 	if binExists("/usr/bin/omarchy-notification-send") {
-		_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰐲",
-			"Waiting for a parent",
-			fmt.Sprintf("%s wants to run %s", created["user"], created["cmd"]))
+		kind, _ := created["kind"].(string)
+		title, body := "Waiting for a parent", fmt.Sprintf("%s wants to run %s", created["user"], created["cmd"])
+		if kind == "pair" {
+			title, body = "Scan to pair", "Parent phone only — not the kid's."
+		}
+		_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰐲", title, body)
 	}
 	if summonOverlay(created) {
 		return
