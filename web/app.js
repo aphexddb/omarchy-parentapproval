@@ -64,12 +64,14 @@ function idb() {
 
 async function saveRecord(hostId, rec) {
   const db = await idb();
-  return new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put(rec, hostId);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  const recs = await listRecords().catch(() => [rec]);
+  writeBridge(recs.length ? recs : [rec]);
 }
 
 async function loadRecord(hostId) {
@@ -90,6 +92,63 @@ async function listRecords() {
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
   });
+}
+
+function writeBridge(recs) {
+  const slim = (recs || [])
+    .filter((r) => r && r.host_id && r.device_id && r.secret)
+    .map((r) => ({
+      host_id: r.host_id,
+      host_name: r.host_name,
+      device_id: r.device_id,
+      secret: r.secret,
+    }));
+  const raw = JSON.stringify(slim);
+  try {
+    localStorage.setItem("pa_rec", raw);
+  } catch (e) {
+    /* private mode */
+  }
+  document.cookie = "pa_rec=" + encodeURIComponent(raw) + "; Max-Age=31536000; Path=/; Secure; SameSite=Lax";
+}
+
+function readBridge() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem("pa_rec");
+  } catch (e) {
+    raw = null;
+  }
+  if (!raw) {
+    const m = document.cookie.match(/(?:^|; )pa_rec=([^;]*)/);
+    if (m) {
+      try {
+        raw = decodeURIComponent(m[1]);
+      } catch (e) {
+        raw = null;
+      }
+    }
+  }
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((r) => r && r.host_id && r.device_id && r.secret) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function hydrateRecords() {
+  let recs = await listRecords().catch(() => []);
+  if (recs.length) {
+    writeBridge(recs);
+    return recs;
+  }
+  recs = readBridge();
+  for (const r of recs) {
+    await saveRecord(r.host_id, r);
+  }
+  return recs;
 }
 
 function hasSign() {
@@ -209,6 +268,10 @@ async function enableNotifications(hostId, deviceId, msgEl) {
     );
     return;
   }
+  if (!hostId || !deviceId) {
+    say("ok", "Notifications allowed. Scan a pairing QR from this Home Screen app so it can buzz.");
+    return;
+  }
   const vapidRes = await fetch("/vapid-public");
   if (!vapidRes.ok) throw new Error("Could not load VAPID key");
   const vapid = await vapidRes.json();
@@ -232,6 +295,22 @@ async function enableNotifications(hostId, deviceId, msgEl) {
   say("ok", "Notifications on. Next time the kid needs sudo, this phone will buzz.");
 }
 
+function showNotifySetup(recs) {
+  const rec = recs && recs[0];
+  show("notify-setup");
+  if (rec) {
+    $("notify-setup-host").textContent = rec.host_name || "this laptop";
+    $("notify-setup-paired").classList.remove("hidden");
+    $("notify-setup-lead").textContent =
+      "iPhone will not buzz until you tap Allow in this Home Screen app. Safari pairing does not copy over.";
+  } else {
+    $("notify-setup-paired").classList.add("hidden");
+    $("notify-setup-lead").textContent =
+      "iPhone Home Screen apps have their own storage. Pairing in Safari does not count. Tap Allow, then scan a pairing QR from this app.";
+  }
+  wireNotifyButton($("notify-setup-btn"), rec && rec.host_id, rec && rec.device_id, $("notify-setup-msg"));
+}
+
 function showGone() {
   show("gone");
   const btn = $("gone-home");
@@ -244,41 +323,35 @@ function showGone() {
 
 async function resumePaired() {
   settleHomeURL();
-  show("home");
-  let recs = [];
-  try {
-    recs = await listRecords();
-  } catch (e) {
-    recs = [];
+  const recs = await hydrateRecords();
+  if (isStandalone() && !notificationsGranted()) {
+    showNotifySetup(recs);
+    return;
   }
-  if (!recs.length) return;
-  $("home-paired").classList.remove("hidden");
-  $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
-  const rec = recs[0];
-  const msg = $("notify-msg");
-  wireNotifyButton($("home-notify-btn"), rec.host_id, rec.device_id, $("home-paired"));
-  wireNotifyButton($("notify-btn"), rec.host_id, rec.device_id, msg);
   if (pushNeedsStandalone()) {
     show("a2hs");
     $("a2hs-done").onclick = () => {
       if (isStandalone()) {
-        show("pair-done");
-        $("paired-host").textContent = rec.host_name || "this laptop";
+        showNotifySetup(recs);
       } else {
         show("a2hs");
       }
     };
     return;
   }
-  if (!notificationsGranted()) {
-    $("paired-host").textContent = rec.host_name || "this laptop";
-    show("pair-done");
-    return;
-  }
-  try {
-    await enableNotifications(rec.host_id, rec.device_id, $("home-paired"));
-  } catch (e) {
-    /* subscribe can be retried from the button */
+  show("home");
+  if (!recs.length) return;
+  $("home-paired").classList.remove("hidden");
+  $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
+  const rec = recs[0];
+  wireNotifyButton($("home-notify-btn"), rec.host_id, rec.device_id, $("home-paired"));
+  wireNotifyButton($("notify-btn"), rec.host_id, rec.device_id, $("notify-msg"));
+  if (notificationsGranted()) {
+    try {
+      await enableNotifications(rec.host_id, rec.device_id, $("home-paired"));
+    } catch (e) {
+      /* subscribe can be retried from the button */
+    }
   }
 }
 
@@ -294,27 +367,19 @@ async function boot() {
     try {
       const meta = await fetch("/p/" + token + "/meta");
       if (!meta.ok) {
-        const recs = await listRecords().catch(() => []);
-        if (recs.length) return resumePaired();
-        showGone();
-        return;
+        return resumePaired();
       }
       const m = await meta.json();
       if (m.kind === "pair" && m.sid) {
-        const recs = await listRecords().catch(() => []);
+        const recs = await hydrateRecords();
         if (recs.length) return resumePaired();
         return bootPair(m.sid);
       }
       if (m.kind === "ask" && m.rid) return bootApprove(m.rid);
-      const recs = await listRecords().catch(() => []);
-      if (recs.length) return resumePaired();
-      showGone();
+      return resumePaired();
     } catch (e) {
-      const recs = await listRecords().catch(() => []);
-      if (recs.length) return resumePaired();
-      showGone();
+      return resumePaired();
     }
-    return;
   }
   if (path.startsWith("/pair/")) {
     return bootPair(path.slice("/pair/".length));
@@ -363,17 +428,32 @@ async function bootPair(sid) {
       });
       settleHomeURL();
       $("paired-host").textContent = done.host_name;
-      show("pair-done");
-      wireNotifyButton($("notify-btn"), done.host_id, done.device_id, $("notify-msg"));
-      if (pushNeedsStandalone()) {
+      if (isStandalone()) {
+        showNotifySetup([
+          {
+            host_id: done.host_id,
+            host_name: done.host_name,
+            device_id: done.device_id,
+          },
+        ]);
+      } else if (pushNeedsStandalone()) {
         show("a2hs");
         $("a2hs-done").onclick = () => {
           if (isStandalone()) {
-            show("pair-done");
+            showNotifySetup([
+              {
+                host_id: done.host_id,
+                host_name: done.host_name,
+                device_id: done.device_id,
+              },
+            ]);
           } else {
             show("a2hs");
           }
         };
+      } else {
+        show("pair-done");
+        wireNotifyButton($("notify-btn"), done.host_id, done.device_id, $("notify-msg"));
       }
     } catch (err) {
       banner($("pair-err"), "err", err.message || String(err));
@@ -401,6 +481,7 @@ async function bootApprove(rid) {
     $("deny-btn").disabled = true;
     return;
   }
+  await hydrateRecords();
   const rec = await loadRecord(req.host_id);
   if (!rec) {
     $("unpaired").classList.remove("hidden");

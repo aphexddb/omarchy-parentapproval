@@ -15,6 +15,9 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function resumePaired",
 		"function pushNeedsStandalone",
 		"function settleHomeURL",
+		"function showNotifySetup",
+		"function hydrateRecords",
+		"function writeBridge",
 		"history.replaceState",
 		"listRecords()",
 	} {
@@ -28,6 +31,9 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	}
 	if !strings.Contains(string(html), `id="gone-home"`) {
 		t.Error("index.html missing gone-home")
+	}
+	if !strings.Contains(string(html), `id="notify-setup"`) {
+		t.Error("index.html missing notify-setup")
 	}
 	man, err := FS.ReadFile("manifest.webmanifest")
 	if err != nil {
