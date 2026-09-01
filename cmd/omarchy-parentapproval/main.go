@@ -79,46 +79,29 @@ func main() {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, `omarchy-parentapproval — parent-phone approval for kids sudo
+	fmt.Fprint(w, `Usage: omarchy-parentapproval <command> [args]
 
-The QR is a request. Pairing is the security boundary. A kid scanning the
-code with their own phone cannot approve it.
-
-Usage:
-  omarchy-parentapproval ask --cmd "pacman -S cowsay"
-                               Test request (does not run the command)
-  omarchy-parentapproval pair  Show a pairing QR for a parent phone
-  omarchy-parentapproval setup-kid USER
-                               Create a kid account and wire PAM
-  omarchy-parentapproval enable
-                               Install PAM, sudoers, systemd (no firewall)
-  omarchy-parentapproval disable
-                               Remove PAM/sudoers hooks
-  omarchy-parentapproval status
-  omarchy-parentapproval pending [--json]
-  omarchy-parentapproval revoke DEVICE_ID
-  omarchy-parentapproval doctor
-  omarchy-parentapproval install-skills
-                               Symlink the agent skill into coding-agent dirs
-  omarchy-parentapproval daemon [--dev] [--relay URL]
-                               Run the approval daemon (production: root/systemd)
-  omarchy-parentapproval pam   PAM helper (called by pam_exec)
-
-ask/pair/status/pending/revoke/doctor talk to the systemd daemon
-(/run/omarchy-parentapproval/pam.sock) as a regular user. enable, disable, and
-setup-kid still need sudo. daemon without --dev must run as root.
-
-Production pairing and approval go through the relay (default
-https://parentapprovals.com) over outbound WSS. The phone talks only to that
-HTTPS origin. --dev is local HTTP only unless --relay is set.
+Commands:
+  ask --cmd CMD                 test an approval request (does not run CMD)
+  pair                          pair a parent phone
+  status                        show daemon and paired phones
+  pending [--json]              list pending requests
+  revoke DEVICE_ID              unpair a phone
+  doctor                        check PAM and daemon
+  enable                        install PAM, sudoers, systemd (root)
+  disable                       remove PAM and sudoers hooks (root)
+  setup-kid USER                create a kid account (root)
+  install-skills                install the agent skill
+  daemon [--dev] [--relay URL]  run the daemon
+  pam                           PAM helper (called by pam_exec)
+  version                       print version
 
 Environment:
-  OMARCHY_PARENTAPPROVAL_DEV=1     Unprivileged state + per-user socket
-  OMARCHY_PARENTAPPROVAL_STATE     State directory
-  OMARCHY_PARENTAPPROVAL_SOCKET    Unix socket path
+  OMARCHY_PARENTAPPROVAL_DEV=1     unprivileged state + per-user socket
+  OMARCHY_PARENTAPPROVAL_STATE     state directory
+  OMARCHY_PARENTAPPROVAL_SOCKET    unix socket path
   OMARCHY_PARENTAPPROVAL_LISTEN    --dev HTTP listen (default 0.0.0.0:17421)
-  OMARCHY_PARENTAPPROVAL_RELAY     Relay origin (default https://parentapprovals.com)
-                                   Set to off for local-only.
+  OMARCHY_PARENTAPPROVAL_RELAY     relay origin (default https://parentapprovals.com; off = local)
 `)
 }
 
