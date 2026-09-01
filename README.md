@@ -6,10 +6,10 @@ This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids ac
 
 Community extra for Omarchy. Not affiliated with Omarchy, Basecamp, or 37signals.
 
-Agents: load [`default/agents/skills/omarchy-parentapproval/SKILL.md`](default/agents/skills/omarchy-parentapproval/SKILL.md) (or run `omarchy-parentapproval install-skills`). The usual test is:
+Agents: load [`default/agents/skills/omarchy-parentapproval/SKILL.md`](default/agents/skills/omarchy-parentapproval/SKILL.md) (or run `parentapproval install-skills`). The usual test is:
 
 ```bash
-omarchy-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask --cmd "pacman -S cowsay"
 ```
 
 ## How it works
@@ -27,37 +27,33 @@ Wheel parents still type a password. The approval path is only for `omarchy-kids
 
 ## Install
 
+Arch / Omarchy package. Writes to `/usr`. Pacman needs sudo.
+
 ```bash
-make PREFIX="$HOME/.local" install
-# or rebuild the Arch package ( -f so makepkg does not reuse a stale tarball )
 makepkg -f -si
 ```
+
+`-f` so makepkg does not reuse a stale tarball. Or `./install-omarchy`, which runs that and copies the overlay plugin.
+
+`sudo make install` also writes to `/usr`. Prefer the package so systemd sysusers and the daemon unit are enabled.
 
 Then teach coding agents the CLI (as the parent, not root):
 
 ```bash
-omarchy-parentapproval install-skills
+parentapproval install-skills
 ```
 
-That symlinks the skill into `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.gemini/config/skills`, and `~/.grok/skills`.
+That symlinks the skill into `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.gemini/config/skills`, and `~/.grok/skills`. `setup-kid` does the same for the kid. `sudo parentapproval install-skills` also links every `omarchy-kids` home.
 
-Then, as the parent (your wheel account, not the kid). After `makepkg -si` the binary is on root's PATH (`/usr/bin`):
+Then, as the parent (your wheel account, not the kid):
 
 ```bash
-sudo omarchy-parentapproval enable
-omarchy-parentapproval pair               # scan; keys land in /var/lib via the systemd daemon
-sudo omarchy-parentapproval setup-kid milo
+sudo parentapproval enable
+parentapproval pair               # scan; keys land in /var/lib via the systemd daemon
+sudo parentapproval setup-kid milo
 ```
 
 `pair`, `ask`, `status`, `pending`, `revoke`, and `doctor` talk to the systemd daemon even as a regular user. `enable`, `disable`, and `setup-kid` still need sudo. Use `--dev` only for an unprivileged local dry-run.
-
-`~/.local/bin` is not on root's PATH. If you installed with `make PREFIX="$HOME/.local" install` (or `./install-omarchy`), call privileged commands with the absolute path:
-
-```bash
-sudo ~/.local/bin/omarchy-parentapproval enable
-~/.local/bin/omarchy-parentapproval pair
-sudo ~/.local/bin/omarchy-parentapproval setup-kid milo
-```
 
 Optional desktop overlay, so polkit and GUI prompts get the same QR card:
 
@@ -66,13 +62,13 @@ omarchy plugin add "$PWD/overlay"
 # or copy overlay/ to ~/.config/omarchy/plugins/parent.approve/
 ```
 
-`setup-kid` creates the account if it does not exist. That password is for login and the lock screen. It will not sudo. You keep your own account; that is the emergency fallback when the phone is dead.
+`setup-kid` creates the account if it does not exist. That password is for login and the lock screen. It will not sudo. You keep your own account; that is the emergency fallback when the phone is dead. It also links the agent skill into that kid's home so their coding agents load it without a separate `install-skills`.
 
 ## Relay
 
 Default origin: **https://parentapprovals.com**. Self-hosters set:
 
-- Laptop: `OMARCHY_PARENTAPPROVAL_RELAY` or `omarchy-parentapproval daemon --relay URL`
+- Laptop: `OMARCHY_PARENTAPPROVAL_RELAY` or `parentapproval daemon --relay URL`
 - Relay process: `RELAY_PUBLIC_URL` (or `PUBLIC_URL`) and `RELAY_DATA` (default `/data`)
 
 `--relay=off` is local-only HTTP (`--dev`). Production does not open a LAN listen port.
@@ -84,9 +80,9 @@ See [`deploy/relay/README.md`](deploy/relay/README.md) for Railway and optional 
 Unprivileged (`--dev` is local HTTP, no PAM):
 
 ```bash
-omarchy-parentapproval daemon --dev      # terminal 1
-omarchy-parentapproval pair --dev        # terminal 2, scan
-omarchy-parentapproval ask --dev --cmd "pacman -S cowsay"
+parentapproval daemon --dev      # terminal 1
+parentapproval pair --dev        # terminal 2, scan
+parentapproval ask --dev --cmd "pacman -S cowsay"
 ```
 
 Against a local relay:
@@ -95,13 +91,13 @@ Against a local relay:
 make relay
 PORT=8080 RELAY_PUBLIC_URL=http://127.0.0.1:8080 RELAY_DATA=/tmp/parentapproval-data \
   ./bin/omarchy-parentapproval-relay
-omarchy-parentapproval daemon --dev --relay http://127.0.0.1:8080
+parentapproval daemon --dev --relay http://127.0.0.1:8080
 ```
 
 Against the installed systemd daemon (phone already paired):
 
 ```bash
-omarchy-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask --cmd "pacman -S cowsay"
 ```
 
 `--cmd` is the string shown on the phone. It is not executed.
@@ -110,17 +106,17 @@ omarchy-parentapproval ask --cmd "pacman -S cowsay"
 
 | Command | What it does |
 |---|---|
-| `omarchy-parentapproval ask --cmd "…"` | Fire a test request (does not run the command) |
-| `omarchy-parentapproval pair` | Pair a parent phone |
-| `omarchy-parentapproval setup-kid NAME` | Create/lock a kid user |
-| `omarchy-parentapproval enable` / `disable` | PAM, sudoers, systemd |
-| `omarchy-parentapproval status` | Host id, relay, paired phones |
-| `omarchy-parentapproval revoke DEVICE_ID` | Drop a phone |
-| `omarchy-parentapproval doctor` | Check PAM order, daemon, relay |
-| `omarchy-parentapproval install-skills` | Symlink the agent skill into coding-agent skill dirs |
-| `omarchy-parentapproval daemon [--dev] [--relay URL]` | The service |
+| `parentapproval ask --cmd "…"` | Fire a test request (does not run the command) |
+| `parentapproval pair` | Pair a parent phone |
+| `parentapproval setup-kid NAME` | Create/lock a kid user |
+| `parentapproval enable` / `disable` | PAM, sudoers, systemd |
+| `parentapproval status` | Host id, relay, paired phones |
+| `parentapproval revoke DEVICE_ID` | Drop a phone |
+| `parentapproval doctor` | Check PAM order, daemon, relay |
+| `parentapproval install-skills` | Symlink the agent skill into this user's coding-agent dirs (root: parent + all kids) |
+| `parentapproval daemon [--dev] [--relay URL]` | The service |
 
-`omarchy-parentapproval --help` is the flag-level source of truth.
+`parentapproval --help` is the flag-level source of truth.
 
 ## What this is not
 

@@ -70,7 +70,7 @@ Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`:
 
 ```
 auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup omarchy-kids
-auth [success=done default=die] pam_exec.so seteuid stdout /usr/bin/omarchy-parentapproval pam
+auth [success=done default=die] pam_exec.so seteuid stdout /usr/bin/parentapproval pam
 ```
 
 Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. This block must stay **above** `pam_fprintd` / `pam_u2f` so an enrolled kid print cannot sudo.

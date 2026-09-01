@@ -633,7 +633,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		ttlS = 180
 	}
 	if d.store.ParentCount() == 0 {
-		return nil, errors.New("no parent phone is paired — run omarchy-parentapproval pair")
+		return nil, errors.New("no parent phone is paired — run parentapproval pair")
 	}
 
 	nonce := make([]byte, 16)

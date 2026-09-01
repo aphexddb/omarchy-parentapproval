@@ -59,7 +59,7 @@ Item {
 
   Process {
     id: pendingProc
-    command: ["omarchy-parentapproval", "pending", "--json"]
+    command: ["parentapproval", "pending", "--json"]
     stdout: StdioCollector {
       onStreamFinished: {
         try {

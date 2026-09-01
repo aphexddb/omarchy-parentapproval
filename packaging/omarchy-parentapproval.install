@@ -5,12 +5,12 @@ post_install() {
   systemctl enable --now omarchy-parentapprovald.service >/dev/null 2>&1 || true
   echo "Parent Approval is installed. Daemon should be running."
   echo "As the parent:"
-  echo "  sudo omarchy-parentapproval enable"
-  echo "  omarchy-parentapproval pair"
-  echo "  sudo omarchy-parentapproval setup-kid <kid-username>"
-  echo "  omarchy-parentapproval install-skills"
+  echo "  sudo parentapproval enable"
+  echo "  parentapproval pair"
+  echo "  sudo parentapproval setup-kid <kid-username>"
+  echo "  parentapproval install-skills"
   echo "Test without a kid account:"
-  echo "  omarchy-parentapproval ask --cmd \"pacman -S cowsay\""
+  echo "  parentapproval ask --cmd \"pacman -S cowsay\""
   echo "Rebuild with makepkg -f -si so pacman does not reuse a stale tarball."
 }
 

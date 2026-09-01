@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	cliName    = "parentapproval"
 	prodState  = "/var/lib/omarchy-parentapproval"
 	prodSocket = "/run/omarchy-parentapproval/pam.sock"
 )
@@ -79,7 +80,7 @@ func main() {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, `Usage: omarchy-parentapproval <command> [args]
+	fmt.Fprint(w, `Usage: parentapproval <command> [args]
 
 Commands:
   ask --cmd CMD                 test an approval request (does not run CMD)
@@ -90,8 +91,8 @@ Commands:
   doctor                        check PAM and daemon
   enable                        install PAM, sudoers, systemd (root)
   disable                       remove PAM and sudoers hooks (root)
-  setup-kid USER                create a kid account (root)
-  install-skills                install the agent skill
+  setup-kid USER                create a kid account; link agent skill (root)
+  install-skills                install the agent skill (this user; root: parent+kids)
   daemon [--dev] [--relay URL]  run the daemon
   pam                           PAM helper (called by pam_exec)
   version                       print version
@@ -182,7 +183,7 @@ func ensureDaemon(socket string) error {
 		return fmt.Errorf("cannot connect to daemon (%s): permission denied — reinstall and restart omarchy-parentapprovald so the socket is world-connectable (0666)", socket)
 	}
 	if socket != prodSocket {
-		return fmt.Errorf("daemon is not running (%s) — start it with: omarchy-parentapproval daemon --dev", socket)
+		return fmt.Errorf("daemon is not running (%s) — start it with: %s daemon --dev", socket, cliName)
 	}
 	_ = execCommand("systemctl", "reset-failed", "omarchy-parentapprovald")
 	startErr := execCommand("systemctl", "start", "omarchy-parentapprovald")
@@ -216,7 +217,7 @@ func isSockPermission(err error) bool {
 func cmdDaemon(args []string) error {
 	p := resolvePaths(args)
 	if !p.dev && os.Geteuid() != 0 {
-		return fmt.Errorf("daemon without --dev must run as root (systemd omarchy-parentapprovald); for a local dry-run: omarchy-parentapproval daemon --dev")
+		return fmt.Errorf("daemon without --dev must run as root (systemd omarchy-parentapprovald); for a local dry-run: %s daemon --dev", cliName)
 	}
 	listen := ""
 	if p.dev || p.relay == "" {
@@ -240,7 +241,7 @@ func cmdDaemon(args []string) error {
 	if relay == "" {
 		relay = "off"
 	}
-	fmt.Fprintf(os.Stderr, "omarchy-parentapproval daemon  socket=%s  state=%s  listen=%s  relay=%s  dev=%v\n", p.socket, p.state, listen, relay, p.dev)
+	fmt.Fprintf(os.Stderr, "%s daemon  socket=%s  state=%s  listen=%s  relay=%s  dev=%v\n", cliName, p.socket, p.state, listen, relay, p.dev)
 	return d.Serve(ctx)
 }
 
@@ -331,7 +332,7 @@ func cmdAsk(args []string) error {
 		}
 	}
 	if cmd == "" {
-		return fmt.Errorf("usage: omarchy-parentapproval ask --cmd \"pacman -S cowsay\"")
+		return fmt.Errorf("usage: %s ask --cmd \"pacman -S cowsay\"", cliName)
 	}
 	if err := ensureDaemon(p.socket); err != nil {
 		return err
@@ -427,7 +428,7 @@ func cmdStatus(args []string) error {
 	}
 	parents, _ := st["parents"].([]any)
 	if len(parents) == 0 {
-		fmt.Println("parents  none — run omarchy-parentapproval pair")
+		fmt.Printf("parents  none — run %s pair\n", cliName)
 	}
 	for _, raw := range parents {
 		m, _ := raw.(map[string]any)
@@ -475,7 +476,7 @@ func cmdRevoke(args []string) error {
 		break
 	}
 	if id == "" {
-		return fmt.Errorf("usage: omarchy-parentapproval revoke DEVICE_ID")
+		return fmt.Errorf("usage: %s revoke DEVICE_ID", cliName)
 	}
 	p := resolvePaths(args)
 	if err := ensureDaemon(p.socket); err != nil {
@@ -546,7 +547,7 @@ func readCmdline(pid int) string {
 			continue
 		}
 		base := filepath.Base(p)
-		if base == "sudo" || base == "pkexec" || base == "omarchy-parentapproval" || base == "omarchy-qr-sudo" {
+		if base == "sudo" || base == "pkexec" || base == cliName || base == "omarchy-parentapproval" {
 			continue
 		}
 		out = append(out, p)

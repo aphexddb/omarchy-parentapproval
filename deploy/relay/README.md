@@ -45,7 +45,7 @@ PORT=8080 RELAY_PUBLIC_URL=http://127.0.0.1:8080 RELAY_DATA=/tmp/parentapproval-
 Point a laptop at it:
 
 ```bash
-omarchy-parentapproval daemon --dev --relay http://127.0.0.1:8080
+parentapproval daemon --dev --relay http://127.0.0.1:8080
 ```
 
 ## Self-host with Caddy

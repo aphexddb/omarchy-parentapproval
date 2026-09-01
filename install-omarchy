@@ -1,27 +1,33 @@
 #!/bin/bash
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")" && pwd)
-prefix=${PREFIX:-$HOME/.local}
+if [ "$(id -u)" -eq 0 ]; then
+  echo "run as the parent, not root. pacman will ask for sudo." >&2
+  exit 1
+fi
 
-make -C "$root" PREFIX="$prefix" install
+root=$(cd "$(dirname "$0")" && pwd)
+cd "$root"
+
+echo "Building the omarchy-parentapproval package and installing it with pacman (sudo)."
+makepkg -f -si
 
 plugin_dst=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve
 mkdir -p "$plugin_dst"
 install -m644 "$root/overlay/manifest.json" "$root/overlay/Panel.qml" "$root/overlay/qmldir" "$plugin_dst/"
 
 echo
-echo "Installed omarchy-parentapproval to $prefix/bin and the overlay plugin to"
+echo "Installed parentapproval to /usr/bin and the overlay plugin to"
 echo "  $plugin_dst"
 echo
-echo "Root's PATH does not include $prefix/bin. Use the absolute path with sudo:"
-echo "  sudo $prefix/bin/omarchy-parentapproval enable"
-echo "  $prefix/bin/omarchy-parentapproval pair"
-echo "  sudo $prefix/bin/omarchy-parentapproval setup-kid <kid-username>"
+echo "As the parent:"
+echo "  sudo parentapproval enable"
+echo "  parentapproval pair"
+echo "  sudo parentapproval setup-kid <kid-username>"
 echo
 echo "Teach coding agents the CLI (as the parent):"
-echo "  $prefix/bin/omarchy-parentapproval install-skills"
+echo "  parentapproval install-skills"
 echo "Test without a kid:"
-echo "  $prefix/bin/omarchy-parentapproval ask --cmd \"pacman -S cowsay\""
+echo "  parentapproval ask --cmd \"pacman -S cowsay\""
 echo
 echo "Restart the shell so the overlay loads: omarchy restart shell"

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"omarchy-parentapproval/internal/daemon"
@@ -13,14 +14,14 @@ import (
 )
 
 const (
-	pamMarker  = "omarchy-parentapproval pam"
+	pamMarker  = "parentapproval pam"
 	sudoersKid = "/etc/sudoers.d/omarchy-kids"
 	unitName   = "omarchy-parentapprovald.service"
 )
 
 func cmdEnable() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("enable must run as root (sudo omarchy-parentapproval enable)")
+		return fmt.Errorf("enable must run as root (sudo parentapproval enable)")
 	}
 	if err := ensureGroup(); err != nil {
 		return err
@@ -38,8 +39,9 @@ func cmdEnable() error {
 		fmt.Fprintf(os.Stderr, "note: systemd unit not enabled (%v)\n", err)
 	}
 	fmt.Println("Parent Approval is enabled.")
-	fmt.Println("Next: omarchy-parentapproval pair")
-	fmt.Println("Then: sudo omarchy-parentapproval setup-kid <username>")
+	fmt.Println("Next: parentapproval pair")
+	fmt.Println("Then: sudo parentapproval setup-kid <username>")
+	linkSkillsForKids()
 	return nil
 }
 
@@ -62,10 +64,10 @@ func cmdTeardownFirewall() error {
 
 func cmdSetupKid(args []string) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("setup-kid must run as root (sudo omarchy-parentapproval setup-kid NAME)")
+		return fmt.Errorf("setup-kid must run as root (sudo parentapproval setup-kid NAME)")
 	}
 	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
-		return fmt.Errorf("usage: omarchy-parentapproval setup-kid USERNAME")
+		return fmt.Errorf("usage: parentapproval setup-kid USERNAME")
 	}
 	name := args[0]
 	if err := validateUsername(name); err != nil {
@@ -79,6 +81,7 @@ func cmdSetupKid(args []string) error {
 			return fmt.Errorf("add %s to %s: %w", name, protocol.KidsGroup, err)
 		}
 		fmt.Printf("Existing user %s is now in %s.\n", name, protocol.KidsGroup)
+		linkSkillsForName(name)
 		return nil
 	}
 	fmt.Printf("Creating %s. This password logs them in. It will not sudo.\n", name)
@@ -96,6 +99,7 @@ func cmdSetupKid(args []string) error {
 		return err
 	}
 	fmt.Printf("Kid account %s is ready. They sudo by asking a parent; you approve on a paired phone.\n", name)
+	linkSkillsForName(name)
 	return nil
 }
 
@@ -123,13 +127,10 @@ func cmdDoctor(args []string) error {
 	}
 	if raw, err := os.ReadFile("/etc/pam.d/sudo"); err == nil {
 		text := string(raw)
-		hasPAM := strings.Contains(text, pamMarker) || strings.Contains(text, "omarchy-qr-sudo pam")
-		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — omarchy-parentapproval enable")
+		hasPAM := strings.Contains(text, pamMarker)
+		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — parentapproval enable")
 		fprint := strings.Index(text, "pam_fprintd.so")
 		ours := strings.Index(text, pamMarker)
-		if ours < 0 {
-			ours = strings.Index(text, "omarchy-qr-sudo pam")
-		}
 		if fprint >= 0 && ours >= 0 {
 			check(ours < fprint, "parent approve is above fingerprint", "fingerprint is above parent approve — kids with an enrolled print could sudo. Re-run enable.")
 		}
@@ -192,7 +193,7 @@ func patchPAM(path string) error {
 		return err
 	}
 	text := string(raw)
-	if strings.Contains(text, pamMarker) || strings.Contains(text, "omarchy-qr-sudo pam") {
+	if strings.Contains(text, pamMarker) {
 		// Keep our lines first so fingerprint/FIDO cannot bypass kids.
 		text = stripPAM(text)
 	}
@@ -208,7 +209,7 @@ func unpatchPAM(path string) error {
 }
 
 func pamLines() string {
-	exe := "/usr/bin/omarchy-parentapproval"
+	exe := "/usr/bin/parentapproval"
 	if p, err := os.Executable(); err == nil {
 		if abs, err := filepath.Abs(p); err == nil {
 			exe = abs
@@ -228,12 +229,11 @@ func stripPAM(text string) string {
 			skipNext = false
 			continue
 		}
-		if strings.Contains(line, "omarchy-parentapproval: kids skip password") ||
-			strings.Contains(line, "omarchy-qr-sudo: kids skip password") {
+		if strings.Contains(line, "omarchy-parentapproval: kids skip password") {
 			skipNext = true
 			continue
 		}
-		if strings.Contains(line, pamMarker) || strings.Contains(line, "omarchy-qr-sudo pam") {
+		if strings.Contains(line, pamMarker) {
 			continue
 		}
 		keep = append(keep, line)
@@ -255,34 +255,144 @@ func installUnit() error {
 	return exec.Command("systemctl", "enable", "--now", unitName).Run()
 }
 
+var skillTargetRels = []string{
+	filepath.Join(".agents", "skills"),
+	filepath.Join(".claude", "skills"),
+	filepath.Join(".codex", "skills"),
+	filepath.Join(".pi", "agent", "skills"),
+	filepath.Join(".gemini", "config", "skills"),
+	filepath.Join(".grok", "skills"),
+}
+
 func cmdInstallSkills() error {
 	src, err := skillDir()
 	if err != nil {
 		return err
 	}
-	home, err := skillHome()
+	targets, err := installSkillsUsers()
 	if err != nil {
 		return err
 	}
-	targets := []string{
-		filepath.Join(home, ".agents", "skills"),
-		filepath.Join(home, ".claude", "skills"),
-		filepath.Join(home, ".codex", "skills"),
-		filepath.Join(home, ".pi", "agent", "skills"),
-		filepath.Join(home, ".gemini", "config", "skills"),
-		filepath.Join(home, ".grok", "skills"),
-	}
 	linked := 0
-	for _, dir := range targets {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "skip %s: %v\n", dir, err)
+	for _, usr := range targets {
+		links, err := linkSkills(src, usr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", usr.Username, err)
 			continue
 		}
-		for _, stale := range []string{"omarchy-qr-sudo"} {
-			old := filepath.Join(dir, stale)
-			if fi, err := os.Lstat(old); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-				_ = os.Remove(old)
+		for _, l := range links {
+			fmt.Printf("linked %s -> %s\n", l.dst, l.src)
+		}
+		linked += len(links)
+	}
+	if linked == 0 {
+		return fmt.Errorf("did not link the skill into any agent directory")
+	}
+	fmt.Println("Agents will pick up /omarchy-parentapproval. Try: parentapproval ask --cmd \"pacman -S cowsay\"")
+	return nil
+}
+
+func installSkillsUsers() ([]*user.User, error) {
+	seen := map[string]bool{}
+	var out []*user.User
+	add := func(usr *user.User) {
+		if usr == nil || usr.HomeDir == "" || seen[usr.Username] {
+			return
+		}
+		seen[usr.Username] = true
+		out = append(out, usr)
+	}
+	if os.Geteuid() == 0 {
+		if u := os.Getenv("SUDO_USER"); u != "" && u != "root" {
+			usr, err := user.Lookup(u)
+			if err != nil {
+				return nil, fmt.Errorf("install-skills: SUDO_USER %q: %w", u, err)
 			}
+			add(usr)
+		}
+		if kids, err := groupMembers(protocol.KidsGroup); err == nil {
+			for _, k := range kids {
+				add(k)
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("install-skills as root needs SUDO_USER or omarchy-kids members (run as the parent, or: sudo -u \"$USER\" parentapproval install-skills)")
+		}
+		return out, nil
+	}
+	usr, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("install-skills: cannot resolve current user: %w", err)
+	}
+	add(usr)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("install-skills: cannot resolve home directory")
+	}
+	return out, nil
+}
+
+func linkSkillsForKids() {
+	src, err := skillDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: agent skill not installed (%v)\n", err)
+		return
+	}
+	kids, err := groupMembers(protocol.KidsGroup)
+	if err != nil || len(kids) == 0 {
+		return
+	}
+	for _, k := range kids {
+		reportSkillLink(src, k)
+	}
+}
+
+func linkSkillsForName(name string) {
+	src, err := skillDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: agent skill not installed (%v)\n", err)
+		return
+	}
+	usr, err := user.Lookup(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: could not teach coding agents for %s (%v)\n", name, err)
+		return
+	}
+	reportSkillLink(src, usr)
+}
+
+func reportSkillLink(src string, usr *user.User) {
+	links, err := linkSkills(src, usr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: could not teach coding agents for %s (%v)\n", usr.Username, err)
+		return
+	}
+	if len(links) > 0 {
+		fmt.Printf("Coding agents for %s will load omarchy-parentapproval.\n", usr.Username)
+	}
+}
+
+type skillLink struct {
+	dst, src string
+}
+
+func linkSkills(src string, usr *user.User) ([]skillLink, error) {
+	if usr == nil || usr.HomeDir == "" {
+		return nil, fmt.Errorf("no home directory")
+	}
+	st, err := os.Stat(usr.HomeDir)
+	if err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("home %s missing", usr.HomeDir)
+	}
+	uid, gid, err := parseUserIDs(usr)
+	if err != nil {
+		return nil, err
+	}
+	var linked []skillLink
+	for _, rel := range skillTargetRels {
+		dir := filepath.Join(usr.HomeDir, rel)
+		if err := mkdirAllOwned(dir, uid, gid); err != nil {
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", dir, err)
+			continue
 		}
 		dst := filepath.Join(dir, "omarchy-parentapproval")
 		if fi, err := os.Lstat(dst); err == nil {
@@ -296,32 +406,85 @@ func cmdInstallSkills() error {
 			fmt.Fprintf(os.Stderr, "skip %s: %v\n", dst, err)
 			continue
 		}
-		fmt.Printf("linked %s -> %s\n", dst, src)
-		linked++
+		_ = os.Lchown(dst, uid, gid)
+		linked = append(linked, skillLink{dst: dst, src: src})
 	}
-	if linked == 0 {
-		return fmt.Errorf("did not link the skill into any agent directory")
+	if len(linked) == 0 {
+		return nil, fmt.Errorf("did not link the skill into any agent directory")
 	}
-	fmt.Println("Agents will pick up /omarchy-parentapproval. Try: omarchy-parentapproval ask --cmd \"pacman -S cowsay\"")
-	return nil
+	return linked, nil
 }
 
-func skillHome() (string, error) {
-	if os.Geteuid() == 0 {
-		if u := os.Getenv("SUDO_USER"); u != "" && u != "root" {
-			usr, err := user.Lookup(u)
-			if err != nil {
-				return "", fmt.Errorf("install-skills: SUDO_USER %q: %w", u, err)
-			}
-			return usr.HomeDir, nil
+func mkdirAllOwned(path string, uid, gid int) error {
+	if path == "" || path == string(os.PathSeparator) {
+		return nil
+	}
+	if st, err := os.Lstat(path); err == nil {
+		if !st.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", path)
 		}
-		return "", fmt.Errorf("install-skills as root needs SUDO_USER (run as the parent, or: sudo -u \"$USER\" omarchy-parentapproval install-skills)")
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "", fmt.Errorf("install-skills: cannot resolve home directory")
+	if err := mkdirAllOwned(filepath.Dir(path), uid, gid); err != nil {
+		return err
 	}
-	return home, nil
+	if err := os.Mkdir(path, 0o755); err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.Chown(path, uid, gid)
+}
+
+func parseUserIDs(usr *user.User) (int, int, error) {
+	uid, err := strconv.Atoi(usr.Uid)
+	if err != nil {
+		return 0, 0, fmt.Errorf("uid: %w", err)
+	}
+	gid, err := strconv.Atoi(usr.Gid)
+	if err != nil {
+		return 0, 0, fmt.Errorf("gid: %w", err)
+	}
+	return uid, gid, nil
+}
+
+func parseGroupMembersLine(line string) []string {
+	parts := strings.SplitN(strings.TrimSpace(line), ":", 4)
+	if len(parts) < 4 || parts[3] == "" {
+		return nil
+	}
+	var names []string
+	for _, n := range strings.Split(parts[3], ",") {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+func groupMembers(name string) ([]*user.User, error) {
+	out, err := exec.Command("getent", "group", name).Output()
+	if err != nil {
+		return nil, err
+	}
+	var users []*user.User
+	seen := map[string]bool{}
+	for _, n := range parseGroupMembersLine(string(out)) {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		u, err := user.Lookup(n)
+		if err != nil {
+			continue
+		}
+		users = append(users, u)
+	}
+	return users, nil
 }
 
 func skillDir() (string, error) {
@@ -330,7 +493,7 @@ func skillDir() (string, error) {
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = resolved
 		}
-		prefix := filepath.Dir(filepath.Dir(exe)) // /usr from /usr/bin/omarchy-parentapproval
+		prefix := filepath.Dir(filepath.Dir(exe)) // /usr from /usr/bin/parentapproval
 		candidates = append(candidates, filepath.Join(prefix, "share", "omarchy-parentapproval", "agents", "skills", "omarchy-parentapproval"))
 		candidates = append(candidates, filepath.Join(filepath.Dir(filepath.Dir(exe)), "default", "agents", "skills", "omarchy-parentapproval"))
 	}
