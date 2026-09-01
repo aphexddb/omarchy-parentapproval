@@ -20,5 +20,6 @@ post_upgrade() {
 }
 
 pre_remove() {
+  /usr/bin/omarchy-qr-sudo teardown-firewall >/dev/null 2>&1 || true
   systemctl disable --now omarchy-qr-sudod.service >/dev/null 2>&1 || true
 }

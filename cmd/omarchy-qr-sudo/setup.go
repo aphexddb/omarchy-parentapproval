@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"omarchy-qr-sudo/internal/daemon"
 	"omarchy-qr-sudo/internal/protocol"
 )
 
@@ -36,6 +37,16 @@ func cmdEnable() error {
 	if err := installUnit(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: systemd unit not enabled (%v)\n", err)
 	}
+	port, err := daemon.EnsureListenPort(prodState)
+	if err != nil {
+		return err
+	}
+	note, err := daemon.InstallFirewall(port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: firewall: %v\n", err)
+	} else {
+		fmt.Printf("LAN port %d — %s\n", port, note)
+	}
 	fmt.Println("Parent Approve is enabled.")
 	fmt.Println("Next: omarchy-qr-sudo pair")
 	fmt.Println("Then: omarchy-qr-sudo setup-kid <username>")
@@ -49,8 +60,16 @@ func cmdDisable() error {
 	_ = unpatchPAM("/etc/pam.d/sudo")
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
 	_ = os.Remove(sudoersKid)
+	_ = cmdTeardownFirewall()
 	_ = exec.Command("systemctl", "disable", "--now", unitName).Run()
 	fmt.Println("Parent Approve hooks removed. Paired phones are unchanged.")
+	return nil
+}
+
+func cmdTeardownFirewall() error {
+	port := daemon.ReadListenPort(prodState)
+	daemon.UninstallFirewall(port)
+	fmt.Printf("Removed ufw allow %d/tcp and LAN ip rule.\n", port)
 	return nil
 }
 

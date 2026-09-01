@@ -53,6 +53,8 @@ func main() {
 		err = cmdEnable()
 	case "disable":
 		err = cmdDisable()
+	case "teardown-firewall":
+		err = cmdTeardownFirewall()
 	case "doctor":
 		err = cmdDoctor()
 	case "-h", "--help", "help":
@@ -169,6 +171,13 @@ func ensureDaemon(socket string) error {
 
 func cmdDaemon(args []string) error {
 	p := resolvePaths(args)
+	if !p.dev {
+		port, err := daemon.EnsureListenPort(p.state)
+		if err != nil {
+			return err
+		}
+		p.listen = fmt.Sprintf("0.0.0.0:%d", port)
+	}
 	d, err := daemon.Open(daemon.Config{
 		StateDir:   p.state,
 		SocketPath: p.socket,
@@ -223,26 +232,14 @@ func cmdPair(args []string) error {
 	} else {
 		fmt.Println("listen    (unknown) — sudo systemctl restart omarchy-qr-sudod")
 	}
-	fw, _ := started["firewall"].(string)
-	if os.Geteuid() == 0 {
-		note, err := daemon.OpenLAN()
-		if err != nil {
-			fw = "CLI hole failed: " + err.Error()
-		} else {
-			fw = note
-		}
-		defer daemon.CloseLAN()
+	fmt.Printf("From another device on the LAN:\n  curl -v --max-time 3 %s\n", url)
+	if ts := daemon.TailscaleIPv4(); ts != "" {
+		tsURL := strings.Replace(url, listenHost(url), ts, 1)
+		fmt.Printf("Tailscale:\n  %s\n", tsURL)
 	}
-	if fw != "" {
-		fmt.Printf("firewall  %s\n", fw)
-	} else {
-		fmt.Println("firewall  (no hole — Omarchy ufw will block other machines)")
-	}
-	fmt.Printf("From another device on the LAN (not ping — ICMP is denied):\n  curl -v --max-time 3 %s\n", url)
 	fmt.Println("Waiting for a phone…  Ctrl-C to abort.")
 
 	onInterrupt(func() {
-		daemon.CloseLAN()
 		_, _ = daemon.PairAbort(p.socket, sid)
 	})
 
@@ -452,6 +449,18 @@ func currentUser() string {
 
 func spaced(s string) string {
 	return strings.Join(strings.Split(s, ""), " ")
+}
+
+func listenHost(rawURL string) string {
+	s := strings.TrimPrefix(rawURL, "http://")
+	s = strings.TrimPrefix(s, "https://")
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndexByte(s, ':'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func confirm(q string) bool {

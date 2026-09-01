@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
-
-	"omarchy-qr-sudo/internal/protocol"
+	"time"
 )
 
-var lanCIDRs = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
-
-const nftTable = "omarchy_qr_sudo"
+const (
+	PreferredPort = 17421
+	portFileName  = "listen.port"
+	lanReplyPref  = "5205"
+)
 
 func binExists(paths ...string) string {
 	for _, p := range paths {
@@ -25,6 +28,10 @@ func binExists(paths ...string) string {
 	return ""
 }
 
+func ufwBin() string {
+	return binExists("/usr/sbin/ufw", "/usr/bin/ufw")
+}
+
 func runLogged(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
@@ -33,161 +40,165 @@ func runLogged(name string, args ...string) (string, error) {
 		log.Printf("firewall: %s %s -> %v %s", name, strings.Join(args, " "), err, s)
 		return s, err
 	}
-	if s != "" {
-		log.Printf("firewall: %s %s -> %s", name, strings.Join(args, " "), s)
-	} else {
-		log.Printf("firewall: %s %s -> ok", name, strings.Join(args, " "))
-	}
+	log.Printf("firewall: %s %s -> ok", name, strings.Join(args, " "))
 	return s, nil
 }
 
-func (d *Daemon) openFirewall() string {
-	if !d.cfg.Ufw {
-		d.fwNote = "skipped (not root / --dev)"
-		return d.fwNote
+// EnsureListenPort returns the process-lifetime TCP port. First enable/install
+// picks an unused high port starting at 17421 and writes it to stateDir.
+func EnsureListenPort(stateDir string) (int, error) {
+	path := filepath.Join(stateDir, portFileName)
+	if b, err := os.ReadFile(path); err == nil {
+		p, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err == nil && p >= 1024 && p <= 65535 {
+			return p, nil
+		}
 	}
-	note, err := OpenLAN()
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return 0, err
+	}
+	for p := PreferredPort; p < PreferredPort+256; p++ {
+		ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", p))
+		if err != nil {
+			continue
+		}
+		_ = ln.Close()
+		if err := os.WriteFile(path, []byte(strconv.Itoa(p)+"\n"), 0o600); err != nil {
+			return 0, err
+		}
+		return p, nil
+	}
+	return 0, fmt.Errorf("no free TCP port in %d-%d", PreferredPort, PreferredPort+255)
+}
+
+func ReadListenPort(stateDir string) int {
+	b, err := os.ReadFile(filepath.Join(stateDir, portFileName))
 	if err != nil {
-		d.fwNote = "failed: " + err.Error()
-		return d.fwNote
+		return PreferredPort
 	}
-	d.fwOpen = true
-	d.fwNote = note
-	return note
+	p, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || p < 1024 {
+		return PreferredPort
+	}
+	return p
 }
 
-func (d *Daemon) closeFirewall() {
-	if !d.fwOpen {
-		return
-	}
-	CloseLAN()
-	d.fwOpen = false
-	d.fwNote = ""
-}
-
-// OpenLAN punches tcp/7421 from RFC1918 so a phone on the Wi-Fi can reach
-// the pairing page. Call from `sudo omarchy-qr-sudo pair` (unsandboxed).
-//
-// Omarchy's ufw uses the iptables-nft INPUT chain. A standalone nft inet
-// table can ACCEPT and still lose: the ip-family ufw DROP still runs.
-// So we always insert iptables -I INPUT 1 (and ufw allow). nft is extra.
-func OpenLAN() (string, error) {
-	port := protocol.ListenPort
-	var notes, errs []string
-
+// InstallFirewall opens PORT/tcp in ufw once and pins LAN replies to the
+// main routing table so Tailscale subnet routes cannot steal SYN-ACKs.
+// Safe to call on every daemon start; it is a no-op when rules exist.
+func InstallFirewall(port int) (string, error) {
+	var notes []string
 	if ufw := ufwBin(); ufw != "" {
-		if err := openUfwRules(ufw, port); err != nil {
-			errs = append(errs, "ufw: "+err.Error())
+		if ufwHas(ufw, port) {
+			notes = append(notes, fmt.Sprintf("ufw %d/tcp already allowed", port))
+		} else if _, err := runLogged(ufw, "allow", fmt.Sprintf("%d/tcp", port), "comment", "omarchy-qr-sudo"); err != nil {
+			return "", fmt.Errorf("ufw allow %d/tcp: %w", port, err)
 		} else {
-			notes = append(notes, fmt.Sprintf("ufw allow %d/tcp RFC1918", port))
+			notes = append(notes, fmt.Sprintf("ufw allow %d/tcp", port))
 		}
 	}
-	// After ufw reload, put ACCEPT at the top of INPUT so it wins over
-	// ufw-before-input DROP.
-	if ipt := binExists("/usr/sbin/iptables", "/sbin/iptables"); ipt != "" {
-		closeIptables(ipt, port)
-		if err := openIptables(ipt, port); err != nil {
-			errs = append(errs, "iptables: "+err.Error())
+	if ip := lanIPv4(); ip != "" && ip != "127.0.0.1" {
+		if ipRuleExists(ip) {
+			notes = append(notes, "ip rule already set")
+		} else if _, err := runLogged("ip", "rule", "add", "from", ip, "lookup", "main", "pref", lanReplyPref); err != nil {
+			log.Printf("firewall: ip rule: %v", err)
 		} else {
-			notes = append(notes, fmt.Sprintf("iptables -I INPUT tcp/%d", port))
-		}
-	}
-	if nft := binExists("/usr/sbin/nft", "/sbin/nft"); nft != "" {
-		if err := openNft(nft, port); err != nil {
-			errs = append(errs, "nft: "+err.Error())
+			notes = append(notes, "ip rule from "+ip+" lookup main")
 		}
 	}
 	if len(notes) == 0 {
-		if len(errs) == 0 {
-			return "", fmt.Errorf("no ufw/iptables — Omarchy default deny will block the LAN")
-		}
-		return "", fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	if len(errs) > 0 {
-		log.Printf("firewall: partial: %s", strings.Join(errs, "; "))
+		return "no ufw (install ufw or allow the port by hand)", nil
 	}
 	return strings.Join(notes, " + "), nil
 }
 
-func CloseLAN() {
-	port := protocol.ListenPort
-	if nft := binExists("/usr/sbin/nft", "/sbin/nft"); nft != "" {
-		_, _ = runLogged(nft, "delete", "table", "inet", nftTable)
-	}
-	if ipt := binExists("/usr/sbin/iptables", "/sbin/iptables"); ipt != "" {
-		closeIptables(ipt, port)
-	}
+// UninstallFirewall removes the persistent ufw allow and LAN ip rule.
+func UninstallFirewall(port int) {
 	if ufw := ufwBin(); ufw != "" {
-		closeUfwRules(ufw, port)
+		seen := map[int]bool{}
+		for _, p := range []int{port, 7421, PreferredPort} {
+			if p <= 0 || seen[p] {
+				continue
+			}
+			seen[p] = true
+			_, _ = runLogged(ufw, "--force", "delete", "allow", fmt.Sprintf("%d/tcp", p))
+		}
+	}
+	if ip := lanIPv4(); ip != "" {
+		_, _ = runLogged("ip", "rule", "del", "from", ip, "lookup", "main", "pref", lanReplyPref)
 	}
 }
 
-func openNft(nft string, port int) error {
-	_, _ = runLogged(nft, "delete", "table", "inet", nftTable)
-	script := fmt.Sprintf(
-		"add table inet %s\n"+
-			"add chain inet %s input { type filter hook input priority -10; policy accept; }\n"+
-			"add rule inet %s input tcp dport %d ip saddr 10.0.0.0/8 accept\n"+
-			"add rule inet %s input tcp dport %d ip saddr 172.16.0.0/12 accept\n"+
-			"add rule inet %s input tcp dport %d ip saddr 192.168.0.0/16 accept\n",
-		nftTable, nftTable, nftTable, port, nftTable, port, nftTable, port,
-	)
-	cmd := exec.Command(nft, "-f", "-")
-	cmd.Stdin = strings.NewReader(script)
-	out, err := cmd.CombinedOutput()
+func ufwHas(ufw string, port int) bool {
+	out, err := exec.Command(ufw, "status").Output()
 	if err != nil {
-		return fmt.Errorf("%v (%s)", err, bytes.TrimSpace(out))
+		return false
 	}
-	log.Printf("firewall: nft opened %s for tcp/%d", nftTable, port)
-	return nil
+	needle := fmt.Sprintf("%d/tcp", port)
+	return strings.Contains(string(out), needle)
 }
 
-func openIptables(ipt string, port int) error {
-	p := strconv.Itoa(port)
-	var last error
-	ok := 0
-	for _, cidr := range lanCIDRs {
-		if _, err := runLogged(ipt, "-I", "INPUT", "1", "-p", "tcp", "--dport", p, "-s", cidr, "-j", "ACCEPT", "-m", "comment", "--comment", "omarchy-qr-sudo"); err != nil {
-			last = err
-			continue
-		}
-		ok++
+func ipRuleExists(lanIP string) bool {
+	out, err := exec.Command("ip", "rule", "list", "pref", lanReplyPref).Output()
+	if err != nil {
+		return false
 	}
-	if ok == 0 {
-		return last
-	}
-	return nil
+	return strings.Contains(string(out), lanIP)
 }
 
-func closeIptables(ipt string, port int) {
-	p := strconv.Itoa(port)
-	for _, cidr := range lanCIDRs {
-		_, _ = runLogged(ipt, "-D", "INPUT", "-p", "tcp", "--dport", p, "-s", cidr, "-j", "ACCEPT", "-m", "comment", "--comment", "omarchy-qr-sudo")
+func lanIPv4() string {
+	c, err := net.DialTimeout("udp", "1.1.1.1:80", time.Second)
+	if err != nil {
+		return ""
 	}
+	defer c.Close()
+	host, _, err := net.SplitHostPort(c.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
-func openUfwRules(ufw string, port int) error {
-	p := strconv.Itoa(port)
-	ok := 0
-	var last error
-	for _, cidr := range lanCIDRs {
-		if _, err := runLogged(ufw, "allow", "from", cidr, "to", "any", "port", p, "proto", "tcp", "comment", "omarchy-qr-sudo"); err != nil {
-			last = err
-			continue
-		}
-		ok++
+func TailscaleIPv4() string {
+	out, err := exec.Command("tailscale", "ip", "-4").Output()
+	if err != nil {
+		return ""
 	}
-	if ok == 0 {
-		return last
-	}
-	_, _ = runLogged(ufw, "reload")
-	return nil
+	return strings.TrimSpace(string(out))
 }
 
-func closeUfwRules(ufw string, port int) {
-	p := strconv.Itoa(port)
-	for _, cidr := range lanCIDRs {
-		_, _ = runLogged(ufw, "delete", "allow", "from", cidr, "to", "any", "port", p, "proto", "tcp")
+func DumpLAN() string {
+	ipt := binExists("/usr/sbin/iptables", "/sbin/iptables")
+	if ipt == "" {
+		return ""
 	}
-	_, _ = runLogged(ufw, "reload")
+	out, err := exec.Command(ipt, "-L", "INPUT", "-n", "--line-numbers").CombinedOutput()
+	if err != nil {
+		return err.Error()
+	}
+	lines := strings.Split(string(out), "\n")
+	if len(lines) > 12 {
+		lines = lines[:12]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (d *Daemon) persistFirewall() {
+	if d.cfg.Dev || !d.cfg.Ufw {
+		d.fwNote = "skipped (--dev)"
+		return
+	}
+	_, port, _ := net.SplitHostPort(d.httpAddr)
+	p, _ := strconv.Atoi(port)
+	if p == 0 {
+		p = ReadListenPort(d.cfg.StateDir)
+	}
+	note, err := InstallFirewall(p)
+	if err != nil {
+		d.fwNote = "failed: " + err.Error()
+		log.Printf("firewall: %s", d.fwNote)
+		return
+	}
+	d.fwNote = note
+	d.fwOpen = true
 }

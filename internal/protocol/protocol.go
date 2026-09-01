@@ -19,8 +19,8 @@ const (
 	DecisionAllow   = "allow"
 	DecisionDeny    = "deny"
 	DefaultAskTTL   = 120
-	DefaultPairTTL  = 120
-	ListenPort      = 7421
+	DefaultPairTTL  = 600
+	ListenPort      = 17421
 	KidsGroup       = "omarchy-kids"
 )
 

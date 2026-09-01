@@ -170,7 +170,6 @@ func (d *Daemon) Close() {
 		_ = d.sockLn.Close()
 	}
 	d.mu.Unlock()
-	d.closeFirewall()
 	_ = os.Remove(d.cfg.SocketPath)
 	d.clearPending()
 }
@@ -194,6 +193,12 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	}
 	d.mu.Lock()
 	d.sockLn = ln
+	if err := d.holdHTTPLocked(); err != nil {
+		d.mu.Unlock()
+		ln.Close()
+		return err
+	}
+	d.persistFirewall()
 	d.mu.Unlock()
 
 	go d.expireLoop(ctx)
@@ -367,28 +372,12 @@ func (d *Daemon) holdHTTPLocked() error {
 			log.Printf("http: %v", err)
 		}
 	}()
-	d.openFirewall()
-	log.Printf("http listen %s (%s)  firewall %s", d.httpAddr, network, d.fwNote)
+	log.Printf("http listen %s (%s)", d.httpAddr, network)
 	return nil
 }
 
 func (d *Daemon) maybeCloseHTTPLocked() {
-	if d.liveHTTPLocked() > 0 {
-		return
-	}
-	if d.httpSrv == nil {
-		return
-	}
-	srv := d.httpSrv
-	d.httpSrv = nil
-	d.httpLn = nil
-	d.httpAddr = ""
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = srv.Shutdown(ctx)
-		cancel()
-	}()
-	d.closeFirewall()
+	// HTTP stays up for the life of the daemon. Firewall is installed once.
 }
 
 func (d *Daemon) PairStart() (map[string]any, error) {
@@ -996,10 +985,6 @@ func listenSpec(addr string) (network, address string) {
 		return "tcp4", addr
 	}
 	return "tcp", addr
-}
-
-func ufwBin() string {
-	return binExists("/usr/sbin/ufw", "/usr/bin/ufw")
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
