@@ -1,4 +1,4 @@
-# omarchy-approve v1
+# parentapproval v1
 
 The QR / pairing URL is a capability *request*. Pairing is the security boundary.
 
