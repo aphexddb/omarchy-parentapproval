@@ -1,4 +1,4 @@
-module omarchy-parentapproval
+module parentapproval
 
 go 1.22
 

@@ -16,7 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"omarchy-parentapproval/internal/protocol"
+	"parentapproval/internal/protocol"
 )
 
 var errRelayDown = errors.New("relay down")

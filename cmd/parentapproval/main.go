@@ -17,16 +17,16 @@ import (
 	"syscall"
 	"time"
 
-	"omarchy-parentapproval/internal/daemon"
-	"omarchy-parentapproval/internal/protocol"
-	"omarchy-parentapproval/internal/qrdisp"
-	"omarchy-parentapproval/web"
+	"parentapproval/internal/daemon"
+	"parentapproval/internal/protocol"
+	"parentapproval/internal/qrdisp"
+	"parentapproval/web"
 )
 
 const (
 	cliName    = "parentapproval"
-	prodState  = "/var/lib/omarchy-parentapproval"
-	prodSocket = "/run/omarchy-parentapproval/pam.sock"
+	prodState  = "/var/lib/parentapproval"
+	prodSocket = "/run/parentapproval/pam.sock"
 )
 
 func main() {
@@ -143,8 +143,8 @@ func resolvePaths(args []string) paths {
 	}
 	if p.dev {
 		home, _ := os.UserHomeDir()
-		p.state = filepath.Join(home, ".local", "state", "omarchy-parentapproval")
-		p.socket = filepath.Join(os.TempDir(), fmt.Sprintf("omarchy-parentapproval-%d.sock", os.Getuid()))
+		p.state = filepath.Join(home, ".local", "state", "parentapproval")
+		p.socket = filepath.Join(os.TempDir(), fmt.Sprintf("parentapproval-%d.sock", os.Getuid()))
 		if !p.relaySet {
 			p.relay = ""
 		}
@@ -180,13 +180,13 @@ func ensureDaemon(socket string) error {
 	if err := dialUnix(socket); err == nil {
 		return nil
 	} else if isSockPermission(err) {
-		return fmt.Errorf("cannot connect to daemon (%s): permission denied — reinstall and restart omarchy-parentapprovald so the socket is world-connectable (0666)", socket)
+		return fmt.Errorf("cannot connect to daemon (%s): permission denied — reinstall and restart parentapprovald so the socket is world-connectable (0666)", socket)
 	}
 	if socket != prodSocket {
 		return fmt.Errorf("daemon is not running (%s) — start it with: %s daemon --dev", socket, cliName)
 	}
-	_ = execCommand("systemctl", "reset-failed", "omarchy-parentapprovald")
-	startErr := execCommand("systemctl", "start", "omarchy-parentapprovald")
+	_ = execCommand("systemctl", "reset-failed", unitName)
+	startErr := execCommand("systemctl", "start", unitName)
 	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := dialUnix(socket); err == nil {
@@ -195,10 +195,10 @@ func ensureDaemon(socket string) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if startErr != nil {
-		return fmt.Errorf("daemon is not running (%s)\nstart it with: sudo systemctl start omarchy-parentapprovald", socket)
+		return fmt.Errorf("daemon is not running (%s)\nstart it with: sudo systemctl start %s", socket, unitName)
 	}
-	status, _ := exec.Command("systemctl", "status", "omarchy-parentapprovald", "--no-pager", "-l").CombinedOutput()
-	return fmt.Errorf("daemon is not running (%s)\nstart it with: sudo systemctl start omarchy-parentapprovald\n%s", socket, strings.TrimSpace(string(status)))
+	status, _ := exec.Command("systemctl", "status", unitName, "--no-pager", "-l").CombinedOutput()
+	return fmt.Errorf("daemon is not running (%s)\nstart it with: sudo systemctl start %s\n%s", socket, unitName, strings.TrimSpace(string(status)))
 }
 
 func dialUnix(socket string) error {
@@ -217,7 +217,7 @@ func isSockPermission(err error) bool {
 func cmdDaemon(args []string) error {
 	p := resolvePaths(args)
 	if !p.dev && os.Geteuid() != 0 {
-		return fmt.Errorf("daemon without --dev must run as root (systemd omarchy-parentapprovald); for a local dry-run: %s daemon --dev", cliName)
+		return fmt.Errorf("daemon without --dev must run as root (systemd parentapprovald); for a local dry-run: %s daemon --dev", cliName)
 	}
 	listen := ""
 	if p.dev || p.relay == "" {
@@ -602,7 +602,7 @@ func showPNG(url string) {
 		return
 	}
 	dir := os.TempDir()
-	path := filepath.Join(dir, "omarchy-parentapproval.png")
+	path := filepath.Join(dir, "parentapproval.png")
 	if err := os.WriteFile(path, png, 0o644); err != nil {
 		return
 	}

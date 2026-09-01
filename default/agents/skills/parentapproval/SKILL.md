@@ -62,7 +62,7 @@ Binary is `/usr/bin/parentapproval` after `makepkg -f -si` or `sudo make install
 | Unprivileged dry-run daemon | `parentapproval daemon --dev` |
 
 `pair`, `ask`, `status`, `pending`, `revoke`, and `doctor` talk to the
-systemd socket `/run/omarchy-parentapproval/pam.sock` as a regular user.
+systemd socket `/run/parentapproval/pam.sock` as a regular user.
 `enable`, `disable`, and `setup-kid` still need sudo.
 `--dev` / `OMARCHY_PARENTAPPROVAL_DEV=1` is only for an unprivileged local
 daemon (`~/.local/state` + a per-user socket).
@@ -103,7 +103,7 @@ is set.
 1. Caller is not in `omarchy-kids` (wheel parent, or you). Use `ask --cmd`, or
    `setup-kid`, or `sudo -u milo sudo pacman -S cowsay` from a kid session.
 2. No paired phone: `parentapproval status` then `pair`.
-3. Daemon down: `parentapproval doctor` and `sudo systemctl start omarchy-parentapprovald`.
+3. Daemon down: `parentapproval doctor` and `sudo systemctl start parentapprovald`.
 4. Relay disconnected: `status` should show the relay URL as connected. Check WAN.
 5. Keys paired in `--dev` but kid sudo uses the systemd daemon — re-pair with
    `parentapproval pair` (no `--dev`).
@@ -123,7 +123,7 @@ There is no firewall / ufw / LAN listen port in production.
 - Do not share the parent's sudo password with the kid.
 - Do not treat the QR as a capability; it is a request the paired key must sign.
 - Do not edit `/usr/share/omarchy/` to "install" this skill. This package ships
-  it under `/usr/share/omarchy-parentapproval/agents/skills/parentapproval/`
+  it under `/usr/share/parentapproval/agents/skills/parentapproval/`
   and `setup-kid` / `install-skills` symlink it into `~/.agents/skills`,
   `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`,
   `~/.gemini/config/skills`, and `~/.grok/skills`.

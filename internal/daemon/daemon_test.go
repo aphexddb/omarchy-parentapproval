@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"omarchy-parentapproval/internal/protocol"
-	"omarchy-parentapproval/internal/relay"
-	"omarchy-parentapproval/internal/store"
-	"omarchy-parentapproval/web"
+	"parentapproval/internal/protocol"
+	"parentapproval/internal/relay"
+	"parentapproval/internal/store"
+	"parentapproval/web"
 )
 
 func startTestDaemon(t *testing.T) (*Daemon, string) {

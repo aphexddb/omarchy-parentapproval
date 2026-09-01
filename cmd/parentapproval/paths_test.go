@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"omarchy-parentapproval/internal/protocol"
+	"parentapproval/internal/protocol"
 )
 
 func TestResolvePathsProdByDefault(t *testing.T) {
@@ -40,14 +40,14 @@ func TestResolvePathsDevFlag(t *testing.T) {
 	if p.socket == prodSocket || p.state == prodState {
 		t.Fatalf("dev should not use prod paths: %+v", p)
 	}
-	if !strings.Contains(p.socket, "omarchy-parentapproval-") {
+	if !strings.Contains(p.socket, "parentapproval-") {
 		t.Fatalf("dev socket %s", p.socket)
 	}
 	if p.relay != "" {
 		t.Fatalf("dev should be local-only, relay=%s", p.relay)
 	}
 	home, _ := os.UserHomeDir()
-	wantState := filepath.Join(home, ".local", "state", "omarchy-parentapproval")
+	wantState := filepath.Join(home, ".local", "state", "parentapproval")
 	if p.state != wantState {
 		t.Fatalf("state=%s want %s", p.state, wantState)
 	}

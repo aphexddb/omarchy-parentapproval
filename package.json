@@ -1,5 +1,5 @@
 {
-  "name": "omarchy-parentapproval",
+  "name": "parentapproval",
   "private": true,
   "description": "Railway IaC for parentapprovals.com",
   "dependencies": {

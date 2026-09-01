@@ -21,7 +21,7 @@ import (
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/gorilla/websocket"
 
-	"omarchy-parentapproval/internal/protocol"
+	"parentapproval/internal/protocol"
 )
 
 const (

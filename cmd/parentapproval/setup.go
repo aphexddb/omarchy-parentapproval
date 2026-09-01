@@ -9,14 +9,15 @@ import (
 	"strconv"
 	"strings"
 
-	"omarchy-parentapproval/internal/daemon"
-	"omarchy-parentapproval/internal/protocol"
+	"parentapproval/internal/daemon"
+	"parentapproval/internal/protocol"
 )
 
 const (
 	pamMarker       = "parentapproval pam"
 	sudoersKid      = "/etc/sudoers.d/omarchy-kids"
-	unitName        = "omarchy-parentapprovald.service"
+	unitName        = "parentapprovald.service"
+	legacyUnitName  = "omarchy-parentapprovald.service"
 	skillName       = "parentapproval"
 	legacySkillName = "omarchy-parentapproval"
 )
@@ -55,6 +56,7 @@ func cmdDisable() error {
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
 	_ = os.Remove(sudoersKid)
 	_ = exec.Command("systemctl", "disable", "--now", unitName).Run()
+	_ = exec.Command("systemctl", "disable", "--now", legacyUnitName).Run()
 	fmt.Println("Parent Approve hooks removed. Paired phones are unchanged.")
 	return nil
 }
@@ -218,7 +220,7 @@ func pamLines() string {
 		}
 	}
 	return "" +
-		"# omarchy-parentapproval: kids skip password; non-kids skip this block.\n" +
+		"# parentapproval: kids skip password; non-kids skip this block.\n" +
 		"auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup " + protocol.KidsGroup + "\n" +
 		"auth [success=done default=die] pam_exec.so seteuid stdout " + exe + " pam\n"
 }
@@ -231,7 +233,7 @@ func stripPAM(text string) string {
 			skipNext = false
 			continue
 		}
-		if strings.Contains(line, "omarchy-parentapproval: kids skip password") {
+		if strings.Contains(line, "parentapproval: kids skip password") {
 			skipNext = true
 			continue
 		}
@@ -500,8 +502,10 @@ func skillDir() (string, error) {
 			exe = resolved
 		}
 		prefix := filepath.Dir(filepath.Dir(exe)) // /usr from /usr/bin/parentapproval
-		share := filepath.Join(prefix, "share", "omarchy-parentapproval", "agents", "skills")
-		candidates = append(candidates, filepath.Join(share, skillName), filepath.Join(share, legacySkillName))
+		for _, pkg := range []string{"parentapproval", "omarchy-parentapproval"} {
+			share := filepath.Join(prefix, "share", pkg, "agents", "skills")
+			candidates = append(candidates, filepath.Join(share, skillName), filepath.Join(share, legacySkillName))
+		}
 		srcDefault := filepath.Join(filepath.Dir(filepath.Dir(exe)), "default", "agents", "skills")
 		candidates = append(candidates, filepath.Join(srcDefault, skillName), filepath.Join(srcDefault, legacySkillName))
 	}

@@ -50,7 +50,7 @@ function banner(el, kind, text) {
   el.textContent = text;
 }
 
-const DB_NAME = "omarchy-parentapproval";
+const DB_NAME = "parentapproval";
 const STORE = "keys";
 
 function idb() {

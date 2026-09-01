@@ -19,23 +19,30 @@ for bin in /usr/bin/parentapproval /usr/bin/omarchy-parentapproval; do
 done
 
 if [[ -d /run/systemd/system ]]; then
+  sudo systemctl disable --now parentapprovald.service 2>/dev/null || true
   sudo systemctl disable --now omarchy-parentapprovald.service 2>/dev/null || true
   sudo systemctl daemon-reload || true
 fi
 
-if pacman -Q omarchy-parentapproval >/dev/null 2>&1; then
-  sudo pacman -R --noconfirm omarchy-parentapproval
-fi
+for pkg in parentapproval omarchy-parentapproval; do
+  if pacman -Q "$pkg" >/dev/null 2>&1; then
+    sudo pacman -R --noconfirm "$pkg"
+  fi
+done
 
 sudo rm -f /usr/bin/parentapproval /usr/bin/omarchy-parentapproval
-sudo rm -f /usr/lib/systemd/system/omarchy-parentapprovald.service
-sudo rm -f /usr/lib/sysusers.d/omarchy-parentapproval.conf
-sudo rm -rf /usr/share/omarchy-parentapproval /usr/share/doc/omarchy-parentapproval /usr/share/licenses/omarchy-parentapproval
-sudo rm -rf /var/lib/omarchy-parentapproval /run/omarchy-parentapproval
+sudo rm -f /usr/lib/systemd/system/parentapprovald.service /usr/lib/systemd/system/omarchy-parentapprovald.service
+sudo rm -f /usr/lib/sysusers.d/parentapproval.conf /usr/lib/sysusers.d/omarchy-parentapproval.conf
+sudo rm -rf /usr/share/parentapproval /usr/share/omarchy-parentapproval
+sudo rm -rf /usr/share/doc/parentapproval /usr/share/doc/omarchy-parentapproval
+sudo rm -rf /usr/share/licenses/parentapproval /usr/share/licenses/omarchy-parentapproval
+sudo rm -rf /var/lib/parentapproval /var/lib/omarchy-parentapproval
+sudo rm -rf /run/parentapproval /run/omarchy-parentapproval
 
 rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve"
 rm -f "$HOME/.local/bin/parentapproval" "$HOME/.local/bin/omarchy-parentapproval"
-rm -rf "$HOME/.local/share/omarchy-parentapproval" "$HOME/.local/state/omarchy-parentapproval"
+rm -rf "$HOME/.local/share/parentapproval" "$HOME/.local/share/omarchy-parentapproval"
+rm -rf "$HOME/.local/state/parentapproval" "$HOME/.local/state/omarchy-parentapproval"
 
 homes=("$HOME")
 if members=$(getent group omarchy-kids 2>/dev/null | cut -d: -f4); then
@@ -73,6 +80,6 @@ done
 rm -f ./*.pkg.tar.zst ./*.pkg.tar.xz
 
 echo
-echo "omarchy-parentapproval package removed. Kid accounts are unchanged."
+echo "parentapproval package removed. Kid accounts are unchanged."
 echo "Reinstall with:  $(dirname "$0")/dev-install"
-echo "verify:  pacman -Q omarchy-parentapproval; command -v /usr/bin/parentapproval"
+echo "verify:  pacman -Q parentapproval; command -v /usr/bin/parentapproval"

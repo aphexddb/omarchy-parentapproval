@@ -39,7 +39,7 @@ the GitHub repo and applying the IaC file.
 make relay
 mkdir -p /tmp/parentapproval-data
 PORT=8080 RELAY_PUBLIC_URL=http://127.0.0.1:8080 RELAY_DATA=/tmp/parentapproval-data \
-  ./bin/omarchy-parentapproval-relay
+  ./bin/parentapproval-relay
 ```
 
 Point a laptop at it:

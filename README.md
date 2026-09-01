@@ -96,7 +96,7 @@ Against a local relay:
 ```bash
 make relay
 PORT=8080 RELAY_PUBLIC_URL=http://127.0.0.1:8080 RELAY_DATA=/tmp/parentapproval-data \
-  ./bin/omarchy-parentapproval-relay
+  ./bin/parentapproval-relay
 parentapproval daemon --dev --relay http://127.0.0.1:8080
 ```
 

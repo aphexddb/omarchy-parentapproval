@@ -11,7 +11,7 @@ if (( EUID == 0 )); then
   exit 1
 fi
 
-echo "Building and installing omarchy-parentapproval (sudo for pacman)."
+echo "Building and installing parentapproval (sudo for pacman)."
 if [[ ${PARENTAPPROVAL_SKIPCHECK:-} == 1 ]]; then
   makepkg -fsi --noconfirm --nocheck
 else
@@ -27,7 +27,7 @@ echo "Installed /usr/bin/parentapproval and overlay plugin:"
 echo "  $plugin_dst"
 echo
 if ! /usr/bin/parentapproval status; then
-  echo "dev-install: status failed; is omarchy-parentapprovald running?" >&2
+  echo "dev-install: status failed; is parentapprovald running?" >&2
   exit 1
 fi
 echo

@@ -22,9 +22,9 @@ import (
 	"syscall"
 	"time"
 
-	"omarchy-parentapproval/internal/protocol"
-	"omarchy-parentapproval/internal/qrdisp"
-	"omarchy-parentapproval/internal/store"
+	"parentapproval/internal/protocol"
+	"parentapproval/internal/qrdisp"
+	"parentapproval/internal/store"
 )
 
 const (
@@ -1181,7 +1181,7 @@ func (c Client) Call(req sockReq) (map[string]any, error) {
 	conn, err := net.DialTimeout("unix", c.Socket, 2*time.Second)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
-			return nil, fmt.Errorf("cannot connect to daemon (%s): permission denied — reinstall and restart omarchy-parentapprovald so the socket is world-connectable (0666)", c.Socket)
+			return nil, fmt.Errorf("cannot connect to daemon (%s): permission denied — reinstall and restart parentapprovald so the socket is world-connectable (0666)", c.Socket)
 		}
 		return nil, fmt.Errorf("daemon is not running (%s): %w", c.Socket, err)
 	}

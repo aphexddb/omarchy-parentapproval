@@ -15,8 +15,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"omarchy-parentapproval/internal/protocol"
-	"omarchy-parentapproval/web"
+	"parentapproval/internal/protocol"
+	"parentapproval/web"
 )
 
 func newTestRelay(t *testing.T) (*Server, *httptest.Server) {

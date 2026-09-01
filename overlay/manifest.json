@@ -3,7 +3,7 @@
   "id": "parent.approve",
   "name": "Parent Approve",
   "version": "0.1.0",
-  "author": "omarchy-parentapproval",
+  "author": "parentapproval",
   "description": "Overlay shown while a kid waits for a parent phone to approve sudo",
   "homepage": "https://github.com/aphexddb/omarchy-parentapproval",
   "license": "MIT",

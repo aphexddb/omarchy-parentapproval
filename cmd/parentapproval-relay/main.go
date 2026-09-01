@@ -4,9 +4,9 @@ import (
 	"log"
 	"os"
 
-	"omarchy-parentapproval/internal/protocol"
-	"omarchy-parentapproval/internal/relay"
-	"omarchy-parentapproval/web"
+	"parentapproval/internal/protocol"
+	"parentapproval/internal/relay"
+	"parentapproval/web"
 )
 
 func main() {
