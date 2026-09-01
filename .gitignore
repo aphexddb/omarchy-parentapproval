@@ -11,3 +11,4 @@ bin/
 /Retrieving
 /tmp-omarchy-parentapproval-nft.txt
 .grok/
+node_modules/

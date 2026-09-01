@@ -7,18 +7,31 @@ Default public URL: `https://parentapprovals.com`
 
 ## Railway
 
-1. Create a service from this repo. The root `Dockerfile` is enough; nixpacks is unused.
-2. `railway up` (or connect the GitHub repo).
-3. Set `RELAY_PUBLIC_URL=https://parentapprovals.com` (or your custom domain).
-   `PUBLIC_URL` is accepted as an alias. Railway sets `PORT`.
-4. Attach a volume at `/data`. VAPID keys live in `/data/vapid.json` and must
-   not rotate silently — keep the volume.
-5. Add custom domain `parentapprovals.com`. Railway issues Let's Encrypt.
-   Do not run ACME in the container.
-6. Single replica. Host connections and live tokens are in memory; VAPID,
-   push subscriptions, and tokens also persist as JSON under `/data`.
+Project config is Infrastructure as Code in [`.railway/railway.ts`](../../.railway/railway.ts)
+(not deprecated `railway.toml` / `railway.json`). After editing:
 
-Health check: `GET /healthz`.
+```bash
+npm install
+railway config plan
+railway config apply
+```
+
+The file owns the `omarchy-parentapproval` service:
+
+1. GitHub source `aphexddb/omarchy-parentapproval` (`main`). The root
+   `Dockerfile` is the builder; Railpack/nixpacks is unused.
+2. `RELAY_PUBLIC_URL=https://parentapprovals.com` (or your custom domain).
+   `PUBLIC_URL` is accepted as an alias. Railway sets `PORT`.
+3. Volume `relay-data` at `/data`. VAPID keys live in `/data/vapid.json` and
+   must not rotate silently — keep the volume.
+4. Custom domain `parentapprovals.com` on port 8080. Railway issues Let's
+   Encrypt. Do not run ACME in the container.
+5. Single replica in `sfo`. Host connections and live tokens are in memory;
+   VAPID, push subscriptions, and tokens also persist as JSON under `/data`.
+6. Health check `GET /healthz`. Railway's default restart policy is on failure.
+
+`railway up` still works for a one-off from this directory. Prefer connecting
+the GitHub repo and applying the IaC file.
 
 ## Local
 
