@@ -38,7 +38,7 @@ func TestLinkSkillsIntoHome(t *testing.T) {
 		t.Fatalf("linked %d want %d", len(links), len(skillTargetRels))
 	}
 	for _, rel := range skillTargetRels {
-		dst := filepath.Join(home, rel, "omarchy-parentapproval")
+		dst := filepath.Join(home, rel, "parentapproval")
 		target, err := os.Readlink(dst)
 		if err != nil {
 			t.Fatalf("%s: %v", dst, err)
@@ -69,7 +69,7 @@ func TestLinkSkillsSkipsNonSymlink(t *testing.T) {
 	if err := os.MkdirAll(agents, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	blocker := filepath.Join(agents, "omarchy-parentapproval")
+	blocker := filepath.Join(agents, "parentapproval")
 	if err := os.Mkdir(blocker, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +86,37 @@ func TestLinkSkillsSkipsNonSymlink(t *testing.T) {
 	}
 	if fi, err := os.Lstat(blocker); err != nil || !fi.IsDir() {
 		t.Fatalf("blocker should remain a directory: %v", err)
+	}
+}
+
+func TestLinkSkillsRemovesLegacyName(t *testing.T) {
+	cur, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "SKILL.md"), []byte("# skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agents := filepath.Join(home, ".agents", "skills")
+	if err := os.MkdirAll(agents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(agents, "omarchy-parentapproval")
+	if err := os.Symlink(src, legacy); err != nil {
+		t.Fatal(err)
+	}
+	usr := *cur
+	usr.HomeDir = home
+	if _, err := linkSkills(src, &usr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy symlink should be gone: %v", err)
+	}
+	if target, err := os.Readlink(filepath.Join(agents, "parentapproval")); err != nil || target != src {
+		t.Fatalf("parentapproval link: %s %v", target, err)
 	}
 }
 

@@ -1,0 +1,78 @@
+#!/bin/bash
+# Tear down a checkout install: disable PAM hooks, uninstall the package,
+# drop the overlay plugin and skill links, wipe daemon state.
+# Does not delete kid login accounts.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if (( EUID == 0 )); then
+  echo "dev-uninstall: run as the parent, not root; the script will sudo." >&2
+  exit 1
+fi
+
+for bin in /usr/bin/parentapproval /usr/bin/omarchy-parentapproval; do
+  if [[ -x $bin ]]; then
+    sudo "$bin" disable || true
+    break
+  fi
+done
+
+if [[ -d /run/systemd/system ]]; then
+  sudo systemctl disable --now omarchy-parentapprovald.service 2>/dev/null || true
+  sudo systemctl daemon-reload || true
+fi
+
+if pacman -Q omarchy-parentapproval >/dev/null 2>&1; then
+  sudo pacman -R --noconfirm omarchy-parentapproval
+fi
+
+sudo rm -f /usr/bin/parentapproval /usr/bin/omarchy-parentapproval
+sudo rm -f /usr/lib/systemd/system/omarchy-parentapprovald.service
+sudo rm -f /usr/lib/sysusers.d/omarchy-parentapproval.conf
+sudo rm -rf /usr/share/omarchy-parentapproval /usr/share/doc/omarchy-parentapproval /usr/share/licenses/omarchy-parentapproval
+sudo rm -rf /var/lib/omarchy-parentapproval /run/omarchy-parentapproval
+
+rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve"
+rm -f "$HOME/.local/bin/parentapproval" "$HOME/.local/bin/omarchy-parentapproval"
+rm -rf "$HOME/.local/share/omarchy-parentapproval" "$HOME/.local/state/omarchy-parentapproval"
+
+homes=("$HOME")
+if members=$(getent group omarchy-kids 2>/dev/null | cut -d: -f4); then
+  IFS=',' read -ra names <<<"$members"
+  for name in "${names[@]}"; do
+    name=${name// /}
+    [[ -z $name ]] && continue
+    home=$(getent passwd "$name" | cut -d: -f6)
+    [[ -n $home && -d $home ]] && homes+=("$home")
+  done
+fi
+
+for home in "${homes[@]}"; do
+  for skill in parentapproval omarchy-parentapproval; do
+    for rel in \
+      .agents/skills \
+      .claude/skills \
+      .codex/skills \
+      .pi/agent/skills \
+      .gemini/config/skills \
+      .grok/skills
+    do
+      p="$home/$rel/$skill"
+      if [[ -L $p ]]; then
+        if [[ $home == "$HOME" ]]; then
+          rm -f "$p"
+        else
+          sudo rm -f "$p"
+        fi
+      fi
+    done
+  done
+done
+
+rm -f ./*.pkg.tar.zst ./*.pkg.tar.xz
+
+echo
+echo "omarchy-parentapproval package removed. Kid accounts are unchanged."
+echo "Reinstall with:  $(dirname "$0")/dev-install"
+echo "verify:  pacman -Q omarchy-parentapproval; command -v /usr/bin/parentapproval"

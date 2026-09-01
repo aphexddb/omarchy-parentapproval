@@ -6,7 +6,7 @@ This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids ac
 
 Community extra for Omarchy. Not affiliated with Omarchy, Basecamp, or 37signals.
 
-Agents: load [`default/agents/skills/omarchy-parentapproval/SKILL.md`](default/agents/skills/omarchy-parentapproval/SKILL.md) (or run `parentapproval install-skills`). The usual test is:
+Agents: load [`default/agents/skills/parentapproval/SKILL.md`](default/agents/skills/parentapproval/SKILL.md) (or run `parentapproval install-skills`). The usual test is:
 
 ```bash
 parentapproval ask --cmd "pacman -S cowsay"
@@ -30,10 +30,16 @@ Wheel parents still type a password. The approval path is only for `omarchy-kids
 Arch / Omarchy package. Writes to `/usr`. Pacman needs sudo.
 
 ```bash
-makepkg -f -si
+./scripts/dev-install
 ```
 
-`-f` so makepkg does not reuse a stale tarball. Or `./install-omarchy`, which runs that and copies the overlay plugin.
+That is `makepkg -f -si --noconfirm` plus the overlay plugin. `-f` so makepkg does not reuse a stale tarball. `./install-omarchy` is the same script.
+
+Tear it down (package, overlay, skill links, daemon state; not kid logins):
+
+```bash
+./scripts/dev-uninstall
+```
 
 `sudo make install` also writes to `/usr`. Prefer the package so systemd sysusers and the daemon unit are enabled.
 

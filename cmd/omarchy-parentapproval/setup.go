@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	pamMarker  = "parentapproval pam"
-	sudoersKid = "/etc/sudoers.d/omarchy-kids"
-	unitName   = "omarchy-parentapprovald.service"
+	pamMarker       = "parentapproval pam"
+	sudoersKid      = "/etc/sudoers.d/omarchy-kids"
+	unitName        = "omarchy-parentapprovald.service"
+	skillName       = "parentapproval"
+	legacySkillName = "omarchy-parentapproval"
 )
 
 func cmdEnable() error {
@@ -288,7 +290,7 @@ func cmdInstallSkills() error {
 	if linked == 0 {
 		return fmt.Errorf("did not link the skill into any agent directory")
 	}
-	fmt.Println("Agents will pick up /omarchy-parentapproval. Try: parentapproval ask --cmd \"pacman -S cowsay\"")
+	fmt.Println("Agents will pick up /parentapproval. Try: parentapproval ask --cmd \"pacman -S cowsay\"")
 	return nil
 }
 
@@ -367,7 +369,7 @@ func reportSkillLink(src string, usr *user.User) {
 		return
 	}
 	if len(links) > 0 {
-		fmt.Printf("Coding agents for %s will load omarchy-parentapproval.\n", usr.Username)
+		fmt.Printf("Coding agents for %s will load parentapproval.\n", usr.Username)
 	}
 }
 
@@ -394,7 +396,11 @@ func linkSkills(src string, usr *user.User) ([]skillLink, error) {
 			fmt.Fprintf(os.Stderr, "skip %s: %v\n", dir, err)
 			continue
 		}
-		dst := filepath.Join(dir, "omarchy-parentapproval")
+		dst := filepath.Join(dir, skillName)
+		legacy := filepath.Join(dir, legacySkillName)
+		if fi, err := os.Lstat(legacy); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			_ = os.Remove(legacy)
+		}
 		if fi, err := os.Lstat(dst); err == nil {
 			if fi.Mode()&os.ModeSymlink == 0 {
 				fmt.Fprintf(os.Stderr, "skip %s: exists and is not a symlink\n", dst)
@@ -494,11 +500,14 @@ func skillDir() (string, error) {
 			exe = resolved
 		}
 		prefix := filepath.Dir(filepath.Dir(exe)) // /usr from /usr/bin/parentapproval
-		candidates = append(candidates, filepath.Join(prefix, "share", "omarchy-parentapproval", "agents", "skills", "omarchy-parentapproval"))
-		candidates = append(candidates, filepath.Join(filepath.Dir(filepath.Dir(exe)), "default", "agents", "skills", "omarchy-parentapproval"))
+		share := filepath.Join(prefix, "share", "omarchy-parentapproval", "agents", "skills")
+		candidates = append(candidates, filepath.Join(share, skillName), filepath.Join(share, legacySkillName))
+		srcDefault := filepath.Join(filepath.Dir(filepath.Dir(exe)), "default", "agents", "skills")
+		candidates = append(candidates, filepath.Join(srcDefault, skillName), filepath.Join(srcDefault, legacySkillName))
 	}
 	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "default", "agents", "skills", "omarchy-parentapproval"))
+		srcDefault := filepath.Join(cwd, "default", "agents", "skills")
+		candidates = append(candidates, filepath.Join(srcDefault, skillName), filepath.Join(srcDefault, legacySkillName))
 	}
 	for _, dir := range candidates {
 		if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err == nil {

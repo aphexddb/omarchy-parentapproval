@@ -1,33 +1,3 @@
 #!/bin/bash
 set -euo pipefail
-
-if [ "$(id -u)" -eq 0 ]; then
-  echo "run as the parent, not root. pacman will ask for sudo." >&2
-  exit 1
-fi
-
-root=$(cd "$(dirname "$0")" && pwd)
-cd "$root"
-
-echo "Building the omarchy-parentapproval package and installing it with pacman (sudo)."
-makepkg -f -si
-
-plugin_dst=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve
-mkdir -p "$plugin_dst"
-install -m644 "$root/overlay/manifest.json" "$root/overlay/Panel.qml" "$root/overlay/qmldir" "$plugin_dst/"
-
-echo
-echo "Installed parentapproval to /usr/bin and the overlay plugin to"
-echo "  $plugin_dst"
-echo
-echo "As the parent:"
-echo "  sudo parentapproval enable"
-echo "  parentapproval pair"
-echo "  sudo parentapproval setup-kid <kid-username>"
-echo
-echo "Teach coding agents the CLI (as the parent):"
-echo "  parentapproval install-skills"
-echo "Test without a kid:"
-echo "  parentapproval ask --cmd \"pacman -S cowsay\""
-echo
-echo "Restart the shell so the overlay loads: omarchy restart shell"
+exec "$(cd "$(dirname "$0")" && pwd)/scripts/dev-install" "$@"

@@ -1,5 +1,5 @@
 ---
-name: omarchy-parentapproval
+name: parentapproval
 description: >
   REQUIRED when Omarchy needs parent permission. Kids in omarchy-kids have
   no sudo password — privileged work (sudo, pkexec, polkit, pacman,
@@ -8,8 +8,8 @@ description: >
   testing an approval, or debugging kids sudo. Call this CLI; do not invent
   a password or wrap sudo. Triggers: parent permission, parent approve,
   kids sudo, omarchy-kids, sudo, pkexec, polkit, pacman, omarchy pkg,
-  pair phone, ask --cmd, setup-kid, parentapproval, omarchy-parentapproval,
-  "approve sudo from my phone". Use when the user runs /omarchy-parentapproval.
+  pair phone, ask --cmd, setup-kid, parentapproval,
+  "approve sudo from my phone". Use when the user runs /parentapproval.
 ---
 
 # Parent Approval (`parentapproval`)
@@ -123,7 +123,7 @@ There is no firewall / ufw / LAN listen port in production.
 - Do not share the parent's sudo password with the kid.
 - Do not treat the QR as a capability; it is a request the paired key must sign.
 - Do not edit `/usr/share/omarchy/` to "install" this skill. This package ships
-  it under `/usr/share/omarchy-parentapproval/agents/skills/omarchy-parentapproval/`
+  it under `/usr/share/omarchy-parentapproval/agents/skills/parentapproval/`
   and `setup-kid` / `install-skills` symlink it into `~/.agents/skills`,
   `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`,
   `~/.gemini/config/skills`, and `~/.grok/skills`.

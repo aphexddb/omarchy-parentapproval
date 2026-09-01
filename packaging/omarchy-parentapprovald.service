@@ -1,7 +1,7 @@
 [Unit]
 Description=Omarchy parent-approval daemon
 Documentation=file:///usr/share/doc/omarchy-parentapproval/README.md
-Documentation=file:///usr/share/omarchy-parentapproval/agents/skills/omarchy-parentapproval/SKILL.md
+Documentation=file:///usr/share/omarchy-parentapproval/agents/skills/parentapproval/SKILL.md
 After=network-online.target
 Wants=network-online.target
 StartLimitBurst=5

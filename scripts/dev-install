@@ -1,0 +1,41 @@
+#!/bin/bash
+# Build the Arch package from this checkout and install it with pacman.
+# Overlay plugin is copied into the parent's Omarchy config.
+# Undo with scripts/dev-uninstall.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if (( EUID == 0 )); then
+  echo "dev-install: do not run makepkg as root; pacman will ask for sudo." >&2
+  exit 1
+fi
+
+echo "Building and installing omarchy-parentapproval (sudo for pacman)."
+if [[ ${PARENTAPPROVAL_SKIPCHECK:-} == 1 ]]; then
+  makepkg -fsi --noconfirm --nocheck
+else
+  makepkg -fsi --noconfirm
+fi
+
+plugin_dst=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve
+mkdir -p "$plugin_dst"
+install -m644 overlay/manifest.json overlay/Panel.qml overlay/qmldir "$plugin_dst/"
+
+echo
+echo "Installed /usr/bin/parentapproval and overlay plugin:"
+echo "  $plugin_dst"
+echo
+if ! /usr/bin/parentapproval status; then
+  echo "dev-install: status failed; is omarchy-parentapprovald running?" >&2
+  exit 1
+fi
+echo
+echo "Next:"
+echo "  sudo /usr/bin/parentapproval enable"
+echo "  /usr/bin/parentapproval pair"
+echo "  /usr/bin/parentapproval ask --cmd \"pacman -S cowsay\""
+echo
+echo "This checkout's bin/ may shadow PATH. Use /usr/bin/parentapproval."
+echo "Remove with:  $(dirname "$0")/dev-uninstall"
+echo "Restart the shell so the overlay loads: omarchy restart shell"
