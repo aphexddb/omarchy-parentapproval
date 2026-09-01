@@ -23,7 +23,20 @@ Item {
   readonly property color onScrimDim: Qt.rgba(1, 1, 1, 0.55)
   readonly property string fontFamily: Style.font.family
 
+  function applyPayload(payloadJson) {
+    var payload = {}
+    try { payload = JSON.parse(payloadJson || "{}") || {} } catch (e) { return }
+    if (payload.user) root.user = String(payload.user)
+    if (payload.cmd) root.cmd = String(payload.cmd)
+    if (payload.match) root.match = String(payload.match)
+    if (payload.matrix && payload.matrix.length) {
+      root.qrRows = payload.matrix
+      root.qrSize = payload.matrix.length
+    }
+  }
+
   function open(payloadJson) {
+    applyPayload(payloadJson)
     root.opened = true
     refresh()
     poll.running = true
@@ -37,6 +50,10 @@ Item {
     poll.running = false
     root.qrSize = 0
     root.qrRows = []
+    root.match = ""
+    root.user = ""
+    root.cmd = ""
+    root.error = ""
   }
 
   function dismiss() {
@@ -59,11 +76,14 @@ Item {
 
   Process {
     id: pendingProc
-    command: ["parentapproval", "pending", "--json"]
+    command: ["/usr/bin/parentapproval", "pending", "--json"]
     stdout: StdioCollector {
+      waitForEnd: true
       onStreamFinished: {
+        var text = String(this.text || "").trim()
+        if (!text) return
         try {
-          var data = JSON.parse(this.text || "{}")
+          var data = JSON.parse(text)
           if (!data.rid) {
             if (root.opened) root.dismiss()
             return

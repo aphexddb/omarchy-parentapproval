@@ -529,6 +529,10 @@ func (s *Server) handleNotify(m msg) {
 		}
 	}
 	s.mu.Unlock()
+	if len(list) == 0 {
+		log.Printf("relay notify %s: no push subscriptions", hostID)
+		return
+	}
 	for _, sub := range list {
 		sub := sub
 		go s.pushOne(hostID, sub, payload)

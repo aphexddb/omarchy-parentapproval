@@ -129,6 +129,23 @@ function isStandalone() {
   );
 }
 
+function isIOS() {
+  return (
+    /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function pushNeedsStandalone() {
+  return isIOS() && !isStandalone();
+}
+
+function settleHomeURL() {
+  if (location.pathname !== "/") {
+    history.replaceState({}, "", "/");
+  }
+}
+
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -145,11 +162,29 @@ async function registerSW() {
   }
 }
 
+function notificationsGranted() {
+  return typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+
+function wireNotifyButton(btn, hostId, deviceId, msgEl) {
+  if (!btn) return;
+  btn.disabled = false;
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await enableNotifications(hostId, deviceId, msgEl);
+    } catch (err) {
+      if (msgEl) banner(msgEl, "err", err.message || String(err));
+      btn.disabled = false;
+    }
+  };
+}
+
 async function enableNotifications(hostId, deviceId, msgEl) {
   const say = (kind, text) => {
     if (msgEl) banner(msgEl, kind, text);
   };
-  if (!isStandalone()) {
+  if (pushNeedsStandalone()) {
     show("a2hs");
     $("a2hs-done").onclick = () => {
       if (isStandalone()) {
@@ -166,14 +201,20 @@ async function enableNotifications(hostId, deviceId, msgEl) {
   }
   const perm = await Notification.requestPermission();
   if (perm !== "granted") {
-    say("err", "Notifications were not allowed.");
+    say(
+      "err",
+      isIOS()
+        ? "Notifications were not allowed. On iPhone: Settings → Parent Approval → Notifications."
+        : "Notifications were not allowed."
+    );
     return;
   }
   const vapidRes = await fetch("/vapid-public");
   if (!vapidRes.ok) throw new Error("Could not load VAPID key");
   const vapid = await vapidRes.json();
-  const reg = (await navigator.serviceWorker.ready) || (await registerSW());
+  const reg = (await registerSW()) || (await navigator.serviceWorker.ready);
   if (!reg) throw new Error("Service worker failed to register");
+  await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(vapid.publicKey),
@@ -191,6 +232,56 @@ async function enableNotifications(hostId, deviceId, msgEl) {
   say("ok", "Notifications on. Next time the kid needs sudo, this phone will buzz.");
 }
 
+function showGone() {
+  show("gone");
+  const btn = $("gone-home");
+  if (!btn) return;
+  btn.onclick = async () => {
+    settleHomeURL();
+    await resumePaired();
+  };
+}
+
+async function resumePaired() {
+  settleHomeURL();
+  show("home");
+  let recs = [];
+  try {
+    recs = await listRecords();
+  } catch (e) {
+    recs = [];
+  }
+  if (!recs.length) return;
+  $("home-paired").classList.remove("hidden");
+  $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
+  const rec = recs[0];
+  const msg = $("notify-msg");
+  wireNotifyButton($("home-notify-btn"), rec.host_id, rec.device_id, $("home-paired"));
+  wireNotifyButton($("notify-btn"), rec.host_id, rec.device_id, msg);
+  if (pushNeedsStandalone()) {
+    show("a2hs");
+    $("a2hs-done").onclick = () => {
+      if (isStandalone()) {
+        show("pair-done");
+        $("paired-host").textContent = rec.host_name || "this laptop";
+      } else {
+        show("a2hs");
+      }
+    };
+    return;
+  }
+  if (!notificationsGranted()) {
+    $("paired-host").textContent = rec.host_name || "this laptop";
+    show("pair-done");
+    return;
+  }
+  try {
+    await enableNotifications(rec.host_id, rec.device_id, $("home-paired"));
+  } catch (e) {
+    /* subscribe can be retried from the button */
+  }
+}
+
 async function boot() {
   registerSW();
   const path = location.pathname.replace(/\/+$/, "");
@@ -203,15 +294,25 @@ async function boot() {
     try {
       const meta = await fetch("/p/" + token + "/meta");
       if (!meta.ok) {
-        show("gone");
+        const recs = await listRecords().catch(() => []);
+        if (recs.length) return resumePaired();
+        showGone();
         return;
       }
       const m = await meta.json();
-      if (m.kind === "pair" && m.sid) return bootPair(m.sid);
+      if (m.kind === "pair" && m.sid) {
+        const recs = await listRecords().catch(() => []);
+        if (recs.length) return resumePaired();
+        return bootPair(m.sid);
+      }
       if (m.kind === "ask" && m.rid) return bootApprove(m.rid);
-      show("gone");
+      const recs = await listRecords().catch(() => []);
+      if (recs.length) return resumePaired();
+      showGone();
     } catch (e) {
-      show("gone");
+      const recs = await listRecords().catch(() => []);
+      if (recs.length) return resumePaired();
+      showGone();
     }
     return;
   }
@@ -221,24 +322,7 @@ async function boot() {
   if (path.startsWith("/a/")) {
     return bootApprove(path.slice("/a/".length));
   }
-  show("home");
-  try {
-    const recs = await listRecords();
-    if (recs.length) {
-      $("home-paired").classList.remove("hidden");
-      $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
-      $("home-notify-btn").onclick = async () => {
-        try {
-          const rec = recs[0];
-          await enableNotifications(rec.host_id, rec.device_id, null);
-        } catch (err) {
-          banner($("home-paired"), "err", err.message || String(err));
-        }
-      };
-    }
-  } catch (e) {
-    /* empty db is fine */
-  }
+  await resumePaired();
 }
 
 async function bootPair(sid) {
@@ -277,17 +361,20 @@ async function bootPair(sid) {
         device_id: done.device_id,
         secret: secretB64,
       });
+      settleHomeURL();
       $("paired-host").textContent = done.host_name;
       show("pair-done");
-      $("notify-btn").onclick = async () => {
-        $("notify-btn").disabled = true;
-        try {
-          await enableNotifications(done.host_id, done.device_id, $("notify-msg"));
-        } catch (err) {
-          banner($("notify-msg"), "err", err.message || String(err));
-          $("notify-btn").disabled = false;
-        }
-      };
+      wireNotifyButton($("notify-btn"), done.host_id, done.device_id, $("notify-msg"));
+      if (pushNeedsStandalone()) {
+        show("a2hs");
+        $("a2hs-done").onclick = () => {
+          if (isStandalone()) {
+            show("pair-done");
+          } else {
+            show("a2hs");
+          }
+        };
+      }
     } catch (err) {
       banner($("pair-err"), "err", err.message || String(err));
       $("pair-btn").disabled = false;
@@ -299,7 +386,7 @@ async function bootApprove(rid) {
   show("approve");
   const res = await fetch("/a/" + rid, { headers: { Accept: "application/json" } });
   if (!res.ok) {
-    show("gone");
+    showGone();
     return;
   }
   const req = await res.json();
@@ -325,7 +412,7 @@ async function bootApprove(rid) {
     const left = Math.max(0, req.exp - Math.floor(Date.now() / 1000));
     $("countdown").textContent = left + "s left";
     if (left <= 0) {
-      show("gone");
+      showGone();
     }
   };
   tick();

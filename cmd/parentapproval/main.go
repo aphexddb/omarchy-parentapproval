@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -386,10 +388,13 @@ func presentAndWait(socket string, created map[string]any) error {
 		return err
 	}
 	fmt.Println(box)
-	summonOverlay(created)
-	showPNG(url)
+	presentDisplay(created)
+	defer dismissDisplay()
 
-	onInterrupt(func() { _, _ = daemon.Cancel(socket, rid) })
+	onInterrupt(func() {
+		dismissDisplay()
+		_, _ = daemon.Cancel(socket, rid)
+	})
 
 	waited, err := daemon.Wait(socket, rid)
 	if err != nil {
@@ -566,51 +571,110 @@ func readCwd(pid int) string {
 	return cwd
 }
 
-func summonOverlay(created map[string]any) {
+var (
+	displayMu sync.Mutex
+	imvCmd    *exec.Cmd
+)
+
+func overlayPayload(created map[string]any) (string, error) {
+	url, _ := created["qr_url"].(string)
+	matrix, err := qrdisp.Matrix(url)
+	if err != nil {
+		matrix = nil
+	}
+	b, err := json.Marshal(map[string]any{
+		"cmd":    created["cmd"],
+		"user":   created["user"],
+		"match":  created["match"],
+		"url":    created["qr_url"],
+		"matrix": matrix,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func presentDisplay(created map[string]any) {
 	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
 		return
 	}
-	path, err := os.Executable()
-	if err != nil {
-		return
-	}
-	payload := fmt.Sprintf(`{"cmd":%q,"user":%q,"match":%q,"url":%q}`,
-		created["cmd"], created["user"], created["match"], created["qr_url"])
-	_ = payload
-	_ = path
-	// Best-effort: Omarchy shell plugin if the user installed it.
-	if _, err := os.Stat("/usr/bin/omarchy-shell"); err == nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = execCommandContext(ctx, "omarchy-shell", "shell", "summon", "parent.approve")
-		}()
-	}
-	if _, err := os.Stat("/usr/bin/omarchy-notification-send"); err == nil {
+	if binExists("/usr/bin/omarchy-notification-send") {
 		_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰐲",
 			"Waiting for a parent",
 			fmt.Sprintf("%s wants to run %s", created["user"], created["cmd"]))
 	}
+	if summonOverlay(created) {
+		return
+	}
+	url, _ := created["qr_url"].(string)
+	showPNG(url)
+}
+
+func summonOverlay(created map[string]any) bool {
+	if !binExists("/usr/bin/omarchy-shell") {
+		return false
+	}
+	payload, err := overlayPayload(created)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := execCommandOutput(ctx, "omarchy-shell", "shell", "summon", "parent.approve", payload)
+	return err == nil && strings.TrimSpace(out) == "ok"
 }
 
 func showPNG(url string) {
 	if os.Getenv("WAYLAND_DISPLAY") == "" {
 		return
 	}
+	if !binExists("/usr/bin/imv") {
+		return
+	}
 	png, err := qrdisp.PNG(url, 512)
 	if err != nil {
 		return
 	}
-	dir := os.TempDir()
-	path := filepath.Join(dir, "parentapproval.png")
+	path := filepath.Join(os.TempDir(), "parentapproval.png")
 	if err := os.WriteFile(path, png, 0o644); err != nil {
 		return
 	}
-	if _, err := os.Stat("/usr/bin/imv"); err == nil {
-		go func() {
-			_ = execCommand("imv", "-w", "omarchy-parent-qr", path)
-		}()
+	displayMu.Lock()
+	defer displayMu.Unlock()
+	killImvLocked()
+	cmd, err := execStart("imv", "-w", "omarchy-parent-qr", path)
+	if err != nil {
+		return
 	}
+	imvCmd = cmd
+	go func() {
+		_ = cmd.Wait()
+		displayMu.Lock()
+		if imvCmd == cmd {
+			imvCmd = nil
+		}
+		displayMu.Unlock()
+	}()
+}
+
+func dismissDisplay() {
+	if binExists("/usr/bin/omarchy-shell") {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _ = execCommandOutput(ctx, "omarchy-shell", "shell", "hide", "parent.approve")
+		cancel()
+	}
+	displayMu.Lock()
+	killImvLocked()
+	displayMu.Unlock()
+}
+
+func killImvLocked() {
+	if imvCmd == nil || imvCmd.Process == nil {
+		return
+	}
+	_ = imvCmd.Process.Kill()
+	imvCmd = nil
 }
 
 func execCommand(name string, args ...string) error {

@@ -39,6 +39,9 @@ sudo rm -rf /usr/share/licenses/parentapproval /usr/share/licenses/omarchy-paren
 sudo rm -rf /var/lib/parentapproval /var/lib/omarchy-parentapproval
 sudo rm -rf /run/parentapproval /run/omarchy-parentapproval
 
+if command -v omarchy >/dev/null; then
+  omarchy plugin disable parent.approve >/dev/null 2>&1 || true
+fi
 rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve"
 rm -f "$HOME/.local/bin/parentapproval" "$HOME/.local/bin/omarchy-parentapproval"
 rm -rf "$HOME/.local/share/parentapproval" "$HOME/.local/share/omarchy-parentapproval"

@@ -305,7 +305,7 @@ func TestManifestAndSW(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&man); err != nil {
 		t.Fatal(err)
 	}
-	if man["display"] != "standalone" || man["start_url"] != "/" || man["name"] != "Parent Approval" {
+	if man["display"] != "standalone" || man["start_url"] != "/" || man["name"] != "Parent Approval" || man["id"] != "/" {
 		t.Fatalf("manifest %+v", man)
 	}
 	if man["theme_color"] != "#0b0d10" {

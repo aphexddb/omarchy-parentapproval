@@ -144,6 +144,14 @@ func cmdDoctor(args []string) error {
 	} else {
 		fmt.Println("warn kids sudoers not installed")
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		plugin := filepath.Join(home, ".config", "omarchy", "plugins", "parent.approve", "manifest.json")
+		if _, err := os.Stat(plugin); err == nil {
+			raw, _ := os.ReadFile(filepath.Join(home, ".config", "omarchy", "shell.json"))
+			enabled := strings.Contains(string(raw), "parent.approve")
+			check(enabled, "overlay plugin parent.approve enabled", "overlay plugin is installed but not enabled — run: omarchy plugin enable parent.approve")
+		}
+	}
 	if !ok {
 		return fmt.Errorf("doctor found problems")
 	}

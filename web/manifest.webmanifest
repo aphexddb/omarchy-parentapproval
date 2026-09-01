@@ -1,4 +1,5 @@
 {
+  "id": "/",
   "name": "Parent Approval",
   "short_name": "Parent Approve",
   "description": "Approve kids sudo from this phone.",
