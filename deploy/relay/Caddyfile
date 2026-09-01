@@ -1,0 +1,3 @@
+parentapprovals.com {
+	reverse_proxy relay:8080
+}

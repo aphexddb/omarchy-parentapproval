@@ -22,6 +22,7 @@ const (
 	DefaultPairTTL  = 600
 	ListenPort      = 17421
 	KidsGroup       = "omarchy-kids"
+	DefaultRelayURL = "https://parentapprovals.com"
 )
 
 // B64 is raw URL-safe base64 (no padding), used for keys, nonces, hashes, sigs.

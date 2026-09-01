@@ -14,14 +14,17 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
-	"omarchy-qr-sudo/internal/protocol"
-	"omarchy-qr-sudo/internal/qrdisp"
-	"omarchy-qr-sudo/internal/store"
+	"omarchy-parentapproval/internal/protocol"
+	"omarchy-parentapproval/internal/qrdisp"
+	"omarchy-parentapproval/internal/store"
 )
 
 const (
@@ -36,8 +39,8 @@ type Config struct {
 	SocketPath string
 	Listen     string
 	Dev        bool
-	Ufw        bool
 	Web        fs.FS
+	RelayURL   string
 }
 
 type Daemon struct {
@@ -52,17 +55,16 @@ type Daemon struct {
 	httpLn   net.Listener
 	httpSrv  *http.Server
 	httpAddr string
-	fwOpen   bool
-	fwMethod string
-	fwNote   string
 
 	sockLn net.Listener
+	relay  *relayClient
 }
 
 type pairSession struct {
 	SID     string
 	SAS     string
 	Exp     time.Time
+	QRURL   string
 	Pending *store.Parent
 	Done    *protocol.PairDone
 	Waiters []chan *protocol.PairDone
@@ -78,6 +80,7 @@ type Request struct {
 	CWD     string
 	Cmd     string
 	CmdHash []byte
+	QRURL   string
 
 	Result   string
 	DeviceID string
@@ -96,7 +99,11 @@ type sockReq struct {
 }
 
 func Open(cfg Config) (*Daemon, error) {
-	if cfg.Listen == "" {
+	if cfg.RelayURL == "off" {
+		cfg.RelayURL = ""
+	}
+	cfg.RelayURL = strings.TrimRight(cfg.RelayURL, "/")
+	if cfg.Listen == "" && cfg.RelayURL == "" {
 		cfg.Listen = fmt.Sprintf("0.0.0.0:%d", protocol.ListenPort)
 	}
 	st, err := store.Open(cfg.StateDir)
@@ -111,6 +118,9 @@ func Open(cfg Config) (*Daemon, error) {
 		store:    st,
 		requests: map[string]*Request{},
 		byUser:   map[string]string{},
+	}
+	if cfg.RelayURL != "" {
+		d.relay = newRelayClient(d, cfg.RelayURL)
 	}
 	return d, nil
 }
@@ -183,23 +193,27 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	mode := os.FileMode(0o660)
-	if d.cfg.Dev {
-		mode = 0o666
-	}
-	if err := os.Chmod(d.cfg.SocketPath, mode); err != nil {
+	// 0666: PAM runs as the kid (pam_exec seteuid) and parent clients are
+	// unprivileged. Allow is still Ed25519-gated; pair/revoke reject
+	// omarchy-kids via SO_PEERCRED.
+	if err := os.Chmod(d.cfg.SocketPath, 0o666); err != nil {
 		ln.Close()
 		return err
 	}
 	d.mu.Lock()
 	d.sockLn = ln
-	if err := d.holdHTTPLocked(); err != nil {
-		d.mu.Unlock()
-		ln.Close()
-		return err
+	if d.cfg.Listen != "" {
+		if err := d.holdHTTPLocked(); err != nil {
+			d.mu.Unlock()
+			ln.Close()
+			return err
+		}
 	}
-	d.persistFirewall()
 	d.mu.Unlock()
+
+	if d.relay != nil {
+		go d.relay.Run(ctx)
+	}
 
 	go d.expireLoop(ctx)
 
@@ -268,6 +282,7 @@ func (d *Daemon) expire() {
 func (d *Daemon) handleSock(c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(3 * time.Minute))
+	uid, uidOK := unixPeerUID(c)
 	dec := json.NewDecoder(c)
 	enc := json.NewEncoder(c)
 	var req sockReq
@@ -275,7 +290,7 @@ func (d *Daemon) handleSock(c net.Conn) {
 		_ = enc.Encode(map[string]string{"error": "bad json"})
 		return
 	}
-	resp, err := d.dispatch(req)
+	resp, err := d.dispatch(req, uid, uidOK)
 	if err != nil {
 		_ = enc.Encode(map[string]string{"error": err.Error()})
 		return
@@ -283,7 +298,74 @@ func (d *Daemon) handleSock(c net.Conn) {
 	_ = enc.Encode(resp)
 }
 
-func (d *Daemon) dispatch(req sockReq) (any, error) {
+func unixPeerUID(c net.Conn) (uint32, bool) {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return 0, false
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return 0, false
+	}
+	var cred *syscall.Ucred
+	var ctrlErr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, ctrlErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+	}); err != nil || ctrlErr != nil || cred == nil {
+		return 0, false
+	}
+	return cred.Uid, true
+}
+
+func adminOp(op string) bool {
+	switch op {
+	case "pair-start", "pair-confirm", "pair-abort", "revoke":
+		return true
+	default:
+		return false
+	}
+}
+
+func authorizeAdminRPC(uid uint32, uidOK bool) error {
+	if !uidOK {
+		return errors.New("pairing and revoke require a local unix connection")
+	}
+	if uid == 0 {
+		return nil
+	}
+	if userInGroup(uid, protocol.KidsGroup) {
+		return errors.New("omarchy-kids cannot pair or revoke — use a parent account")
+	}
+	return nil
+}
+
+func userInGroup(uid uint32, group string) bool {
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		return false
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return false
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return false
+	}
+	for _, id := range gids {
+		if id == g.Gid {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
+	if adminOp(req.Op) {
+		if err := authorizeAdminRPC(uid, uidOK); err != nil {
+			return nil, err
+		}
+	}
 	switch req.Op {
 	case "pair-start":
 		return d.PairStart()
@@ -339,22 +421,12 @@ func randomDigits(n int) string {
 	return string(out)
 }
 
-func (d *Daemon) liveHTTPLocked() int {
-	n := 0
-	if d.pairing != nil {
-		n++
-	}
-	for _, r := range d.requests {
-		if r.Result == "" && time.Now().Before(r.Exp) {
-			n++
-		}
-	}
-	return n
-}
-
 func (d *Daemon) holdHTTPLocked() error {
 	if d.httpLn != nil {
 		return nil
+	}
+	if d.cfg.Listen == "" {
+		return errors.New("no local HTTP listen address")
 	}
 	network, addr := listenSpec(d.cfg.Listen)
 	ln, err := net.Listen(network, addr)
@@ -377,18 +449,13 @@ func (d *Daemon) holdHTTPLocked() error {
 }
 
 func (d *Daemon) maybeCloseHTTPLocked() {
-	// HTTP stays up for the life of the daemon. Firewall is installed once.
+	// Local HTTP (if any) stays up for the life of the daemon.
 }
 
 func (d *Daemon) PairStart() (map[string]any, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.pairing != nil && time.Now().Before(d.pairing.Exp) && d.pairing.Done == nil {
-		// Replace an in-flight pairing session.
 		d.failPairLocked()
-	}
-	if err := d.holdHTTPLocked(); err != nil {
-		return nil, err
 	}
 	p := &pairSession{
 		SID: randomHex(16),
@@ -396,14 +463,57 @@ func (d *Daemon) PairStart() (map[string]any, error) {
 		Exp: time.Now().Add(time.Duration(protocol.DefaultPairTTL) * time.Second),
 	}
 	d.pairing = p
-	url := fmt.Sprintf("%s/pair/%s", d.BaseURL(), p.SID)
+	sid := p.SID
+	sas := p.SAS
+	exp := p.Exp
+	d.mu.Unlock()
+
+	via := "lan"
+	url := ""
+	if d.relay != nil {
+		if err := d.relay.WaitReady(3 * time.Second); err != nil {
+			d.mu.Lock()
+			if d.pairing != nil && d.pairing.SID == sid {
+				d.failPairLocked()
+			}
+			d.mu.Unlock()
+			return nil, relayUnreachable(d.relay.PublicURL())
+		}
+		token, err := d.relay.Open("pair", sid, "", protocol.DefaultPairTTL)
+		if err != nil {
+			d.mu.Lock()
+			if d.pairing != nil && d.pairing.SID == sid {
+				d.failPairLocked()
+			}
+			d.mu.Unlock()
+			return nil, relayUnreachable(d.relay.PublicURL())
+		}
+		url = d.relay.PublicURL() + "/p/" + token
+		via = "relay"
+	} else {
+		d.mu.Lock()
+		if err := d.holdHTTPLocked(); err != nil {
+			d.failPairLocked()
+			d.mu.Unlock()
+			return nil, err
+		}
+		url = fmt.Sprintf("%s/pair/%s", d.BaseURL(), sid)
+		d.mu.Unlock()
+	}
+
+	d.mu.Lock()
+	if d.pairing != nil && d.pairing.SID == sid {
+		d.pairing.QRURL = url
+	}
+	listen := d.httpAddr
+	d.mu.Unlock()
 	return map[string]any{
-		"sid":      p.SID,
-		"sas":      p.SAS,
-		"qr_url":   url,
-		"exp":      p.Exp.Unix(),
-		"listen":   d.httpAddr,
-		"firewall": d.fwNote,
+		"sid":    sid,
+		"sas":    sas,
+		"qr_url": url,
+		"exp":    exp.Unix(),
+		"listen": listen,
+		"via":    via,
 	}, nil
 }
 
@@ -523,20 +633,9 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		ttlS = 180
 	}
 	if d.store.ParentCount() == 0 {
-		return nil, errors.New("no parent phone is paired — run omarchy-qr-sudo pair")
+		return nil, errors.New("no parent phone is paired — run omarchy-parentapproval pair")
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if oldID, ok := d.byUser[user]; ok {
-		if old, ok := d.requests[oldID]; ok && old.Result == "" {
-			old.Result = resultCancel
-			close(old.done)
-		}
-	}
-	if err := d.holdHTTPLocked(); err != nil {
-		return nil, err
-	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
@@ -553,10 +652,62 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		CmdHash: protocol.CmdHash(user, service, cwd, cmd),
 		done:    make(chan struct{}),
 	}
+
+	d.mu.Lock()
+	if oldID, ok := d.byUser[user]; ok {
+		if old, ok := d.requests[oldID]; ok && old.Result == "" {
+			old.Result = resultCancel
+			close(old.done)
+		}
+	}
+	if d.relay == nil {
+		if err := d.holdHTTPLocked(); err != nil {
+			d.mu.Unlock()
+			return nil, err
+		}
+	}
 	d.requests[r.RID] = r
 	d.byUser[user] = r.RID
+	d.mu.Unlock()
+
+	via := "lan"
+	url := ""
+	if d.relay != nil {
+		if err := d.relay.WaitReady(3 * time.Second); err != nil {
+			d.Cancel(r.RID)
+			return nil, relayUnreachable(d.relay.PublicURL())
+		}
+		token, err := d.relay.Open("ask", "", r.RID, ttlS)
+		if err != nil {
+			d.Cancel(r.RID)
+			return nil, relayUnreachable(d.relay.PublicURL())
+		}
+		url = d.relay.PublicURL() + "/p/" + token
+		via = "relay"
+	} else {
+		d.mu.Lock()
+		url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+		d.mu.Unlock()
+	}
+
+	d.mu.Lock()
+	if req := d.requests[r.RID]; req != nil {
+		req.QRURL = url
+	}
+	listen := d.httpAddr
 	d.writePendingLocked()
-	url := fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+	d.mu.Unlock()
+
+	if d.relay != nil && via == "relay" {
+		title := "Parent Approval"
+		body := fmt.Sprintf("%s wants to run %s", r.User, r.Cmd)
+		go func() {
+			if err := d.relay.Notify("", title, body, url); err != nil {
+				log.Printf("relay notify: %v", err)
+			}
+		}()
+	}
+
 	return map[string]any{
 		"rid":      r.RID,
 		"qr_url":   url,
@@ -566,8 +717,8 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		"cmd":      r.Cmd,
 		"host":     d.HostName(),
 		"cmd_hash": protocol.B64(r.CmdHash),
-		"listen":   d.httpAddr,
-		"firewall": d.fwNote,
+		"listen":   listen,
+		"via":      via,
 	}, nil
 }
 
@@ -624,7 +775,10 @@ func (d *Daemon) Pending() (map[string]any, error) {
 	defer d.mu.Unlock()
 	for _, r := range d.requests {
 		if r.Result == "" && time.Now().Before(r.Exp) {
-			url := fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+			url := r.QRURL
+			if url == "" {
+				url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+			}
 			matrix, _ := qrdisp.Matrix(url)
 			return map[string]any{
 				"rid":       r.RID,
@@ -661,7 +815,17 @@ func (d *Daemon) Status() (map[string]any, error) {
 		}
 	}
 	pairing := d.pairing != nil
+	listen := d.cfg.Listen
+	if d.httpAddr != "" {
+		listen = d.httpAddr
+	}
 	d.mu.Unlock()
+	relayURL := ""
+	relayOK := false
+	if d.relay != nil {
+		relayURL = d.relay.PublicURL()
+		relayOK = d.relay.Ready()
+	}
 	return map[string]any{
 		"host_id":   d.HostID(),
 		"host_name": d.HostName(),
@@ -669,7 +833,9 @@ func (d *Daemon) Status() (map[string]any, error) {
 		"pending":   pending,
 		"pairing":   pairing,
 		"dev":       d.cfg.Dev,
-		"listen":    d.cfg.Listen,
+		"listen":    listen,
+		"relay":     relayURL,
+		"relay_ok":  relayOK,
 	}, nil
 }
 
@@ -724,10 +890,14 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 	case path == "/" || path == "/index.html":
 		d.writeWeb(w, "index.html")
 		return
-	case path == "/app.js" || path == "/app.css" || path == "/nacl.min.js" || path == "/sha256.min.js":
-		d.writeWeb(w, strings.TrimPrefix(path, "/"))
-		return
 	default:
+		name := strings.TrimPrefix(path, "/")
+		if name != "" && !strings.Contains(name, "/") && !strings.Contains(name, "..") && d.cfg.Web != nil {
+			if _, err := fs.Stat(d.cfg.Web, name); err == nil {
+				d.writeWeb(w, name)
+				return
+			}
+		}
 		http.NotFound(w, req)
 	}
 }
@@ -752,6 +922,12 @@ func (d *Daemon) writeWeb(w http.ResponseWriter, name string) {
 		ctype = "application/javascript; charset=utf-8"
 	case ".css":
 		ctype = "text/css; charset=utf-8"
+	case ".webmanifest":
+		ctype = "application/manifest+json"
+	case ".png":
+		ctype = "image/png"
+	case ".svg":
+		ctype = "image/svg+xml"
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "no-store")
@@ -946,7 +1122,10 @@ func (d *Daemon) writePendingLocked() {
 	path := filepath.Join(d.cfg.StateDir, "pending.json")
 	for _, r := range d.requests {
 		if r.Result == "" && time.Now().Before(r.Exp) {
-			url := fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+			url := r.QRURL
+			if url == "" {
+				url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+			}
 			matrix, _ := qrdisp.Matrix(url)
 			payload, _ := json.MarshalIndent(map[string]any{
 				"rid":       r.RID,
@@ -1001,6 +1180,9 @@ type Client struct {
 func (c Client) Call(req sockReq) (map[string]any, error) {
 	conn, err := net.DialTimeout("unix", c.Socket, 2*time.Second)
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			return nil, fmt.Errorf("cannot connect to daemon (%s): permission denied — reinstall and restart omarchy-parentapprovald so the socket is world-connectable (0666)", c.Socket)
+		}
 		return nil, fmt.Errorf("daemon is not running (%s): %w", c.Socket, err)
 	}
 	defer conn.Close()

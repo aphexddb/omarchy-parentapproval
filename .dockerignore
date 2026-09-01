@@ -1,0 +1,11 @@
+.git
+.grok
+bin
+pkg
+src
+*.pkg.tar.zst
+Checking
+Entering
+Extracting
+Retrieving
+tmp-omarchy-qr-sudo-nft.txt

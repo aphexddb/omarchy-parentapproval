@@ -8,19 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"omarchy-qr-sudo/internal/daemon"
-	"omarchy-qr-sudo/internal/protocol"
+	"omarchy-parentapproval/internal/daemon"
+	"omarchy-parentapproval/internal/protocol"
 )
 
 const (
-	pamMarker  = "omarchy-qr-sudo pam"
+	pamMarker  = "omarchy-parentapproval pam"
 	sudoersKid = "/etc/sudoers.d/omarchy-kids"
-	unitName   = "omarchy-qr-sudod.service"
+	unitName   = "omarchy-parentapprovald.service"
 )
 
 func cmdEnable() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("enable must run as root (sudo omarchy-qr-sudo enable)")
+		return fmt.Errorf("enable must run as root (sudo omarchy-parentapproval enable)")
 	}
 	if err := ensureGroup(); err != nil {
 		return err
@@ -37,19 +37,9 @@ func cmdEnable() error {
 	if err := installUnit(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: systemd unit not enabled (%v)\n", err)
 	}
-	port, err := daemon.EnsureListenPort(prodState)
-	if err != nil {
-		return err
-	}
-	note, err := daemon.InstallFirewall(port)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "note: firewall: %v\n", err)
-	} else {
-		fmt.Printf("LAN port %d — %s\n", port, note)
-	}
-	fmt.Println("Parent Approve is enabled.")
-	fmt.Println("Next: omarchy-qr-sudo pair")
-	fmt.Println("Then: omarchy-qr-sudo setup-kid <username>")
+	fmt.Println("Parent Approval is enabled.")
+	fmt.Println("Next: omarchy-parentapproval pair")
+	fmt.Println("Then: sudo omarchy-parentapproval setup-kid <username>")
 	return nil
 }
 
@@ -60,25 +50,22 @@ func cmdDisable() error {
 	_ = unpatchPAM("/etc/pam.d/sudo")
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
 	_ = os.Remove(sudoersKid)
-	_ = cmdTeardownFirewall()
 	_ = exec.Command("systemctl", "disable", "--now", unitName).Run()
 	fmt.Println("Parent Approve hooks removed. Paired phones are unchanged.")
 	return nil
 }
 
 func cmdTeardownFirewall() error {
-	port := daemon.ReadListenPort(prodState)
-	daemon.UninstallFirewall(port)
-	fmt.Printf("Removed ufw allow %d/tcp and LAN ip rule.\n", port)
+	fmt.Println("firewall is unused — pairing goes through the relay")
 	return nil
 }
 
 func cmdSetupKid(args []string) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("setup-kid must run as root (sudo omarchy-qr-sudo setup-kid NAME)")
+		return fmt.Errorf("setup-kid must run as root (sudo omarchy-parentapproval setup-kid NAME)")
 	}
 	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
-		return fmt.Errorf("usage: omarchy-qr-sudo setup-kid USERNAME")
+		return fmt.Errorf("usage: omarchy-parentapproval setup-kid USERNAME")
 	}
 	name := args[0]
 	if err := validateUsername(name); err != nil {
@@ -108,11 +95,11 @@ func cmdSetupKid(args []string) error {
 	if err := passwd.Run(); err != nil {
 		return err
 	}
-	fmt.Printf("Kid account %s is ready. They sudo by showing a QR; you approve on a paired phone.\n", name)
+	fmt.Printf("Kid account %s is ready. They sudo by asking a parent; you approve on a paired phone.\n", name)
 	return nil
 }
 
-func cmdDoctor() error {
+func cmdDoctor(args []string) error {
 	ok := true
 	check := func(cond bool, good, bad string) {
 		if cond {
@@ -122,20 +109,27 @@ func cmdDoctor() error {
 			ok = false
 		}
 	}
-	_, err := os.Stat(prodSocket)
-	dev := os.Getenv("OMARCHY_QR_SUDO_DEV") == "1" || os.Geteuid() != 0
-	if dev {
-		p := resolvePaths(nil)
-		_, err = os.Stat(p.socket)
-		check(err == nil, "daemon socket "+p.socket, "daemon is not running")
+	p := resolvePaths(args)
+	if err := ensureDaemon(p.socket); err != nil {
+		check(false, "", err.Error())
+	} else if st, err := daemon.Status(p.socket); err != nil {
+		check(false, "", "cannot talk to daemon at "+p.socket+": "+err.Error())
 	} else {
-		check(err == nil, "daemon socket "+prodSocket, "daemon is not running — systemctl start omarchy-qr-sudod")
+		check(true, "daemon socket "+p.socket, "")
+		if u, _ := st["relay"].(string); u != "" {
+			okb, _ := st["relay_ok"].(bool)
+			check(okb, "relay "+u, "relay disconnected ("+u+") — check WAN")
+		}
 	}
 	if raw, err := os.ReadFile("/etc/pam.d/sudo"); err == nil {
 		text := string(raw)
-		check(strings.Contains(text, pamMarker), "PAM sudo hook installed", "PAM sudo hook missing — omarchy-qr-sudo enable")
+		hasPAM := strings.Contains(text, pamMarker) || strings.Contains(text, "omarchy-qr-sudo pam")
+		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — omarchy-parentapproval enable")
 		fprint := strings.Index(text, "pam_fprintd.so")
 		ours := strings.Index(text, pamMarker)
+		if ours < 0 {
+			ours = strings.Index(text, "omarchy-qr-sudo pam")
+		}
 		if fprint >= 0 && ours >= 0 {
 			check(ours < fprint, "parent approve is above fingerprint", "fingerprint is above parent approve — kids with an enrolled print could sudo. Re-run enable.")
 		}
@@ -173,7 +167,7 @@ func ensureGroup() error {
 
 func writeSudoers() error {
 	body := `# Kids may sudo, but PAM will demand a parent-phone signature.
-# timestamp_timeout=0 so each invocation is a new QR.
+# timestamp_timeout=0 so each invocation is a new request.
 Defaults:%` + protocol.KidsGroup + ` timestamp_timeout=0
 %` + protocol.KidsGroup + ` ALL=(ALL:ALL) ALL
 `
@@ -198,7 +192,7 @@ func patchPAM(path string) error {
 		return err
 	}
 	text := string(raw)
-	if strings.Contains(text, pamMarker) {
+	if strings.Contains(text, pamMarker) || strings.Contains(text, "omarchy-qr-sudo pam") {
 		// Keep our lines first so fingerprint/FIDO cannot bypass kids.
 		text = stripPAM(text)
 	}
@@ -214,14 +208,14 @@ func unpatchPAM(path string) error {
 }
 
 func pamLines() string {
-	exe := "/usr/bin/omarchy-qr-sudo"
+	exe := "/usr/bin/omarchy-parentapproval"
 	if p, err := os.Executable(); err == nil {
 		if abs, err := filepath.Abs(p); err == nil {
 			exe = abs
 		}
 	}
 	return "" +
-		"# omarchy-qr-sudo: kids skip password; non-kids skip this block.\n" +
+		"# omarchy-parentapproval: kids skip password; non-kids skip this block.\n" +
 		"auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup " + protocol.KidsGroup + "\n" +
 		"auth [success=done default=die] pam_exec.so seteuid stdout " + exe + " pam\n"
 }
@@ -234,11 +228,12 @@ func stripPAM(text string) string {
 			skipNext = false
 			continue
 		}
-		if strings.Contains(line, "omarchy-qr-sudo: kids skip password") {
+		if strings.Contains(line, "omarchy-parentapproval: kids skip password") ||
+			strings.Contains(line, "omarchy-qr-sudo: kids skip password") {
 			skipNext = true
 			continue
 		}
-		if strings.Contains(line, pamMarker) {
+		if strings.Contains(line, pamMarker) || strings.Contains(line, "omarchy-qr-sudo pam") {
 			continue
 		}
 		keep = append(keep, line)
@@ -258,4 +253,98 @@ func installUnit() error {
 		return err
 	}
 	return exec.Command("systemctl", "enable", "--now", unitName).Run()
+}
+
+func cmdInstallSkills() error {
+	src, err := skillDir()
+	if err != nil {
+		return err
+	}
+	home, err := skillHome()
+	if err != nil {
+		return err
+	}
+	targets := []string{
+		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(home, ".claude", "skills"),
+		filepath.Join(home, ".codex", "skills"),
+		filepath.Join(home, ".pi", "agent", "skills"),
+		filepath.Join(home, ".gemini", "config", "skills"),
+		filepath.Join(home, ".grok", "skills"),
+	}
+	linked := 0
+	for _, dir := range targets {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", dir, err)
+			continue
+		}
+		for _, stale := range []string{"omarchy-qr-sudo"} {
+			old := filepath.Join(dir, stale)
+			if fi, err := os.Lstat(old); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				_ = os.Remove(old)
+			}
+		}
+		dst := filepath.Join(dir, "omarchy-parentapproval")
+		if fi, err := os.Lstat(dst); err == nil {
+			if fi.Mode()&os.ModeSymlink == 0 {
+				fmt.Fprintf(os.Stderr, "skip %s: exists and is not a symlink\n", dst)
+				continue
+			}
+			_ = os.Remove(dst)
+		}
+		if err := os.Symlink(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", dst, err)
+			continue
+		}
+		fmt.Printf("linked %s -> %s\n", dst, src)
+		linked++
+	}
+	if linked == 0 {
+		return fmt.Errorf("did not link the skill into any agent directory")
+	}
+	fmt.Println("Agents will pick up /omarchy-parentapproval. Try: omarchy-parentapproval ask --cmd \"pacman -S cowsay\"")
+	return nil
+}
+
+func skillHome() (string, error) {
+	if os.Geteuid() == 0 {
+		if u := os.Getenv("SUDO_USER"); u != "" && u != "root" {
+			usr, err := user.Lookup(u)
+			if err != nil {
+				return "", fmt.Errorf("install-skills: SUDO_USER %q: %w", u, err)
+			}
+			return usr.HomeDir, nil
+		}
+		return "", fmt.Errorf("install-skills as root needs SUDO_USER (run as the parent, or: sudo -u \"$USER\" omarchy-parentapproval install-skills)")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", fmt.Errorf("install-skills: cannot resolve home directory")
+	}
+	return home, nil
+}
+
+func skillDir() (string, error) {
+	var candidates []string
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		prefix := filepath.Dir(filepath.Dir(exe)) // /usr from /usr/bin/omarchy-parentapproval
+		candidates = append(candidates, filepath.Join(prefix, "share", "omarchy-parentapproval", "agents", "skills", "omarchy-parentapproval"))
+		candidates = append(candidates, filepath.Join(filepath.Dir(filepath.Dir(exe)), "default", "agents", "skills", "omarchy-parentapproval"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "default", "agents", "skills", "omarchy-parentapproval"))
+	}
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err == nil {
+			abs, err := filepath.Abs(dir)
+			if err != nil {
+				return dir, nil
+			}
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("skill not installed (missing SKILL.md). Rebuild with make install / makepkg -f -si")
 }

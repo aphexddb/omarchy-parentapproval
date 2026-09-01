@@ -59,7 +59,7 @@ Item {
 
   Process {
     id: pendingProc
-    command: ["omarchy-qr-sudo", "pending", "--json"]
+    command: ["omarchy-parentapproval", "pending", "--json"]
     stdout: StdioCollector {
       onStreamFinished: {
         try {
@@ -168,7 +168,7 @@ Item {
       }
 
       Text {
-        text: "Scan with a paired parent phone. This is not a password."
+        text: "Approve on a paired parent phone. This is not a password."
         color: root.onScrimDim
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall

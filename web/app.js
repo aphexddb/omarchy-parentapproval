@@ -50,7 +50,7 @@ function banner(el, kind, text) {
   el.textContent = text;
 }
 
-const DB_NAME = "omarchy-qr-sudo";
+const DB_NAME = "omarchy-parentapproval";
 const STORE = "keys";
 
 function idb() {
@@ -78,6 +78,16 @@ async function loadRecord(hostId) {
     const tx = db.transaction(STORE, "readonly");
     const req = tx.objectStore(STORE).get(hostId);
     req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function listRecords() {
+  const db = await idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
   });
 }
@@ -112,10 +122,97 @@ function deviceNameGuess() {
   return "Parent phone";
 }
 
+function isStandalone() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+async function registerSW() {
+  if (!("serviceWorker" in navigator)) return null;
+  try {
+    return await navigator.serviceWorker.register("/sw.js");
+  } catch (e) {
+    return null;
+  }
+}
+
+async function enableNotifications(hostId, deviceId, msgEl) {
+  const say = (kind, text) => {
+    if (msgEl) banner(msgEl, kind, text);
+  };
+  if (!isStandalone()) {
+    show("a2hs");
+    $("a2hs-done").onclick = () => {
+      if (isStandalone()) {
+        enableNotifications(hostId, deviceId, msgEl);
+      } else {
+        show("a2hs");
+      }
+    };
+    return;
+  }
+  if (!("Notification" in window) || !("PushManager" in window)) {
+    say("err", "This browser cannot receive push notifications.");
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") {
+    say("err", "Notifications were not allowed.");
+    return;
+  }
+  const vapidRes = await fetch("/vapid-public");
+  if (!vapidRes.ok) throw new Error("Could not load VAPID key");
+  const vapid = await vapidRes.json();
+  const reg = (await navigator.serviceWorker.ready) || (await registerSW());
+  if (!reg) throw new Error("Service worker failed to register");
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(vapid.publicKey),
+  });
+  const posted = await fetch("/push/subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      device_id: deviceId,
+      host_id: hostId,
+      subscription: sub.toJSON(),
+    }),
+  });
+  if (!posted.ok) throw new Error(await posted.text());
+  say("ok", "Notifications on. Next time the kid needs sudo, this phone will buzz.");
+}
+
 async function boot() {
+  registerSW();
   const path = location.pathname.replace(/\/+$/, "");
   if (!hasSign()) {
     show("unsupported");
+    return;
+  }
+  if (path.startsWith("/p/")) {
+    const token = path.slice("/p/".length);
+    try {
+      const meta = await fetch("/p/" + token + "/meta");
+      if (!meta.ok) {
+        show("gone");
+        return;
+      }
+      const m = await meta.json();
+      if (m.kind === "pair" && m.sid) return bootPair(m.sid);
+      if (m.kind === "ask" && m.rid) return bootApprove(m.rid);
+      show("gone");
+    } catch (e) {
+      show("gone");
+    }
     return;
   }
   if (path.startsWith("/pair/")) {
@@ -125,6 +222,23 @@ async function boot() {
     return bootApprove(path.slice("/a/".length));
   }
   show("home");
+  try {
+    const recs = await listRecords();
+    if (recs.length) {
+      $("home-paired").classList.remove("hidden");
+      $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
+      $("home-notify-btn").onclick = async () => {
+        try {
+          const rec = recs[0];
+          await enableNotifications(rec.host_id, rec.device_id, null);
+        } catch (err) {
+          banner($("home-paired"), "err", err.message || String(err));
+        }
+      };
+    }
+  } catch (e) {
+    /* empty db is fine */
+  }
 }
 
 async function bootPair(sid) {
@@ -165,6 +279,15 @@ async function bootPair(sid) {
       });
       $("paired-host").textContent = done.host_name;
       show("pair-done");
+      $("notify-btn").onclick = async () => {
+        $("notify-btn").disabled = true;
+        try {
+          await enableNotifications(done.host_id, done.device_id, $("notify-msg"));
+        } catch (err) {
+          banner($("notify-msg"), "err", err.message || String(err));
+          $("notify-btn").disabled = false;
+        }
+      };
     } catch (err) {
       banner($("pair-err"), "err", err.message || String(err));
       $("pair-btn").disabled = false;

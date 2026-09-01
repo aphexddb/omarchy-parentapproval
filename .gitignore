@@ -1,5 +1,6 @@
 bin/
 *.png
+!web/*.png
 /pkg/
 /src/
 *.pkg.tar.zst
@@ -8,4 +9,5 @@ bin/
 /Entering
 /Extracting
 /Retrieving
-/tmp-omarchy-qr-sudo-nft.txt
+/tmp-omarchy-parentapproval-nft.txt
+.grok/

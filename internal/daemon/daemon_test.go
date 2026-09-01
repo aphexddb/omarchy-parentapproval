@@ -7,15 +7,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"omarchy-qr-sudo/internal/protocol"
-	"omarchy-qr-sudo/internal/store"
-	"omarchy-qr-sudo/web"
+	"omarchy-parentapproval/internal/protocol"
+	"omarchy-parentapproval/internal/relay"
+	"omarchy-parentapproval/internal/store"
+	"omarchy-parentapproval/web"
 )
 
 func startTestDaemon(t *testing.T) (*Daemon, string) {
@@ -320,5 +322,216 @@ func TestListenIPv4Wildcard(t *testing.T) {
 	url, _ := created["qr_url"].(string)
 	if !strings.HasPrefix(d.httpAddr, "0.0.0.0:") {
 		t.Fatalf("wanted 0.0.0.0 bind, got %s url=%s", d.httpAddr, url)
+	}
+}
+
+func TestSocketWorldConnectable(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "pam.sock")
+	d, err := Open(Config{
+		StateDir:   dir,
+		SocketPath: sock,
+		Listen:     "127.0.0.1:0",
+		Web:        web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); d.Close() })
+	go func() { _ = d.Serve(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	var fi os.FileInfo
+	for time.Now().Before(deadline) {
+		var err error
+		fi, err = os.Stat(sock)
+		if err == nil && fi.Mode().Perm() == 0o666 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fi == nil {
+		t.Fatal("socket not ready")
+	}
+	t.Fatalf("socket mode %o want 666", fi.Mode().Perm())
+}
+
+func TestAuthorizeAdminRPC(t *testing.T) {
+	if err := authorizeAdminRPC(0, true); err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	if err := authorizeAdminRPC(1000, false); err == nil {
+		t.Fatal("missing peer cred should deny pair/revoke")
+	}
+	if !adminOp("pair-start") || !adminOp("pair-confirm") || !adminOp("revoke") {
+		t.Fatal("pair/revoke should be admin ops")
+	}
+	if adminOp("create") || adminOp("wait") || adminOp("status") {
+		t.Fatal("create/wait/status must stay available to PAM")
+	}
+}
+
+func waitSock(t *testing.T, sock string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("socket not ready")
+}
+
+func TestRelayUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "pam.sock")
+	d, err := Open(Config{
+		StateDir:   dir,
+		SocketPath: sock,
+		RelayURL:   "http://127.0.0.1:1",
+		Web:        web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); d.Close() })
+	go func() { _ = d.Serve(ctx) }()
+	waitSock(t, sock)
+	_, err = PairStart(sock)
+	if err == nil || !strings.Contains(err.Error(), "relay unreachable") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRelayPairAndAsk(t *testing.T) {
+	rs, err := relay.New(relay.Config{
+		PublicURL: "http://placeholder",
+		DataDir:   t.TempDir(),
+		Web:       web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(rs)
+	t.Cleanup(ts.Close)
+	rs.SetPublicURL(ts.URL)
+
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "pam.sock")
+	d, err := Open(Config{
+		StateDir:   dir,
+		SocketPath: sock,
+		RelayURL:   ts.URL,
+		Web:        web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); d.Close() })
+	go func() { _ = d.Serve(ctx) }()
+	waitSock(t, sock)
+
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	url := started["qr_url"].(string)
+	if !strings.Contains(url, "/p/") || !strings.HasPrefix(url, ts.URL) {
+		t.Fatalf("qr_url %s", url)
+	}
+	token := url[strings.LastIndex(url, "/")+1:]
+	metaRes, err := http.Get(ts.URL + "/p/" + token + "/meta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metaRes.Body.Close()
+	if metaRes.StatusCode != 200 {
+		t.Fatalf("meta %s", metaRes.Status)
+	}
+	var meta map[string]string
+	if err := json.NewDecoder(metaRes.Body).Decode(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["kind"] != "pair" || meta["sid"] != sid {
+		t.Fatalf("meta %+v", meta)
+	}
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := protocol.PairOffer{V: 1, DeviceID: "phone-relay", Name: "Mom Pixel", Alg: "Ed25519", PubKey: protocol.B64(pub)}
+	raw, _ := json.Marshal(offer)
+	post, err := http.Post(ts.URL+"/pair/"+sid, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer post.Body.Close()
+	if post.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(post.Body)
+		t.Fatalf("offer %s %s", post.Status, b)
+	}
+	st, err := PairStatus(sock, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["state"] != "pending_confirm" {
+		t.Fatalf("state %+v", st)
+	}
+	if _, err := PairConfirm(sock, sid); err != nil {
+		t.Fatal(err)
+	}
+
+	priv, deviceID := enrollParent(t, d)
+	created, err := Create(sock, "milo", "sudo", "/", "true", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created["via"] != "relay" {
+		t.Fatalf("via %+v", created)
+	}
+	rid := created["rid"].(string)
+	askURL := created["qr_url"].(string)
+	if !strings.Contains(askURL, "/p/") {
+		t.Fatalf("ask url %s", askURL)
+	}
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/a/"+rid, nil)
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("GET ask %s %s", res.Status, b)
+	}
+	var body protocol.Request
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
+	sig := protocol.Sign(priv, canon)
+	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
+	raw, _ = json.Marshal(dec)
+	decPost, err := http.Post(ts.URL+"/a/"+rid+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decPost.Body.Close()
+	if decPost.StatusCode != 200 {
+		b, _ := io.ReadAll(decPost.Body)
+		t.Fatalf("decision %s %s", decPost.Status, b)
+	}
+	waited, err := Wait(sock, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited["result"] != "allow" {
+		t.Fatalf("wait %+v", waited)
 	}
 }

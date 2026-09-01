@@ -1,0 +1,32 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      RELAY_PUBLIC_URL: https://parentapprovals.com
+      RELAY_DATA: /data
+    volumes:
+      - relay-data:/data
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+    restart: unless-stopped
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

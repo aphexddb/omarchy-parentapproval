@@ -1,18 +1,17 @@
-# Maintainer: omarchy-qr-sudo contributors
-pkgname=omarchy-qr-sudo
+# Maintainer: omarchy-parentapproval contributors
+pkgname=omarchy-parentapproval
 pkgver=0.1.0
-pkgrel=13
-pkgdesc="Parent-phone QR approval for Omarchy kids accounts"
+pkgrel=16
+pkgdesc="Parent-phone approval for Omarchy kids accounts"
 arch=('x86_64' 'aarch64')
-url="https://github.com/gardiner/omarchy-qr-sudo"
+url="https://github.com/aphexddb/omarchy-parentapproval"
 license=('MIT')
 depends=('pam' 'sudo')
 makedepends=('go')
 optdepends=(
   'imv: fullscreen QR on Wayland when the overlay plugin is not installed'
-  'ufw: opens port 7421 on the LAN only while a request is live'
 )
-install=packaging/omarchy-qr-sudo.install
+install=packaging/omarchy-parentapproval.install
 options=('!debug' '!emptydirs')
 source=()
 sha256sums=()

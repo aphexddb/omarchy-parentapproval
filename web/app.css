@@ -116,3 +116,10 @@ input, select {
 .err { background: #2a1418; color: var(--deny); }
 .hidden { display: none; }
 .countdown { color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+.coach ol {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--ink);
+  line-height: 1.55;
+}
+.coach li { margin: 8px 0; }
