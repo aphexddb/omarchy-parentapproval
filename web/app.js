@@ -951,7 +951,7 @@ async function bootApprove(rid) {
   const req = await res.json();
   const rec = await loadRecord(req.host_id);
   if (!rec) {
-    $("host").textContent = req.host_name || "unknown host";
+    $("host").textContent = req.host_name || rec.host_name || "unknown host";
     $("unpaired").classList.remove("hidden");
     $("approve-btn").disabled = true;
     $("actions").classList.add("hidden");
@@ -963,10 +963,10 @@ async function bootApprove(rid) {
     banner($("approve-err"), "err", e.message || String(e));
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
-    $("host").textContent = req.host_name || "";
+    $("host").textContent = req.host_name || rec.host_name || "";
     return;
   }
-  $("host").textContent = req.host_name;
+  $("host").textContent = req.host_name || rec.host_name;
   $("who").textContent = req.user + " · " + req.service;
   $("cmd").textContent = req.cmd;
   $("match").textContent = req.match;
