@@ -82,11 +82,12 @@ type pairSession struct {
 // oneShotGrant lets `ask` run the approved command as root without a second
 // phone prompt or a sudo password. PAM can still redeem it for a matching sudo.
 type oneShotGrant struct {
-	User  string
-	Cmd   string
-	Inner string
-	CWD   string
-	Exp   time.Time
+	User    string
+	Cmd     string
+	Inner   string
+	CWD     string
+	Service string
+	Exp     time.Time
 }
 
 type Request struct {
@@ -403,6 +404,9 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 	case "create":
 		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS)
 	case "redeem":
+		if req.Service != "" && req.Cmd == "" {
+			return map[string]any{"ok": d.RedeemService(req.User, req.Service)}, nil
+		}
 		return map[string]any{"ok": d.Redeem(req.User, req.Cmd)}, nil
 	case "exec":
 		return d.Exec(req.User, req.Cmd)
@@ -941,7 +945,25 @@ func (d *Daemon) Redeem(user, cmd string) bool {
 		d.grant = nil
 		return false
 	}
-	if g.User != user || g.Cmd != cmd {
+	if g.User != user {
+		return false
+	}
+	if g.Cmd == cmd || (g.Inner != "" && g.Inner == protocol.StripLeadingSudo(cmd)) {
+		d.grant = nil
+		return true
+	}
+	return false
+}
+
+func (d *Daemon) RedeemService(user, service string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	g := d.grant
+	if g == nil || time.Now().After(g.Exp) {
+		d.grant = nil
+		return false
+	}
+	if user == "" || service == "" || g.User != user || g.Service != service {
 		return false
 	}
 	d.grant = nil
@@ -1196,11 +1218,12 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 	}
 	if body.Decision == resultAllow {
 		d.grant = &oneShotGrant{
-			User:  r.User,
-			Cmd:   protocol.SudoShellKey(r.Cmd),
-			Inner: protocol.StripLeadingSudo(r.Cmd),
-			CWD:   r.CWD,
-			Exp:   time.Now().Add(45 * time.Second),
+			User:    r.User,
+			Cmd:     protocol.SudoShellKey(r.Cmd),
+			Inner:   protocol.StripLeadingSudo(r.Cmd),
+			CWD:     r.CWD,
+			Service: r.Service,
+			Exp:     time.Now().Add(45 * time.Second),
 		}
 	}
 	close(r.done)
@@ -1497,6 +1520,15 @@ func Create(socket, user, service, cwd, cmd string, ttl int) (map[string]any, er
 
 func Redeem(socket, user, cmd string) (bool, error) {
 	st, err := Call(socket, sockReq{Op: "redeem", User: user, Cmd: cmd})
+	if err != nil {
+		return false, err
+	}
+	ok, _ := st["ok"].(bool)
+	return ok, nil
+}
+
+func RedeemService(socket, user, service string) (bool, error) {
+	st, err := Call(socket, sockReq{Op: "redeem", User: user, Service: service})
 	if err != nil {
 		return false, err
 	}

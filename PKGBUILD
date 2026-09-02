@@ -1,12 +1,12 @@
 # Maintainer: parentapproval contributors
 pkgname=parentapproval
 pkgver=0.1.0
-pkgrel=33
+pkgrel=34
 pkgdesc="Parent-phone approval for Omarchy kids accounts"
 arch=('x86_64' 'aarch64')
 url="https://github.com/aphexddb/omarchy-parentapproval"
 license=('MIT')
-depends=('pam' 'sudo')
+depends=('pam' 'sudo' 'polkit')
 makedepends=('go')
 optdepends=(
   'imv: fullscreen QR on Wayland when the overlay plugin is not installed'

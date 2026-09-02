@@ -57,6 +57,8 @@ func main() {
 		err = cmdAsk(os.Args[2:])
 	case "pam":
 		err = cmdPam()
+	case "polkit-agent":
+		err = cmdPolkitAgent()
 	case "status":
 		err = cmdStatus(os.Args[2:])
 	case "pending":
@@ -112,6 +114,7 @@ Commands:
   install-skills                install the agent skill (root)
   daemon [--dev] [--relay URL]  run the daemon
   pam                           PAM helper (called by pam_exec)
+  polkit-agent                  session polkit agent for kids
   version                       print version
 
 Environment:
@@ -511,10 +514,22 @@ func cmdPam() error {
 	if service == "" {
 		service = "sudo"
 	}
+	if pamLoginService(service) {
+		return fmt.Errorf("parentapproval does not handle login (%s)", service)
+	}
 	cwd := readCwd(os.Getppid())
 	cmd := readCmdline(os.Getppid())
+	polkit := service == "polkit-1" || service == "polkit"
+	if polkit {
+		if ok, err := daemon.RedeemService(p.socket, userName, "polkit"); err == nil && ok {
+			return nil
+		}
+	}
 	if ok, err := daemon.Redeem(p.socket, userName, cmd); err == nil && ok {
 		return nil
+	}
+	if polkit {
+		service = "polkit"
 	}
 	created, err := daemon.Create(p.socket, userName, service, cwd, cmd, protocol.DefaultAskTTL)
 	if err != nil {

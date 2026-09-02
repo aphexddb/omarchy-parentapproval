@@ -1,0 +1,29 @@
+// Kids in omarchy-kids sudo via a parent phone. Polkit must match that
+// model: interactive admin actions become self-auth, then parentapproval
+// PAM (or the session agent) waits for the parent. Session-start and
+// display-manager actions are left to the default policy so login never
+// phones a parent.
+polkit.addRule(function (action, subject) {
+    if (!subject.local || !subject.active) {
+        return;
+    }
+    if (!subject.isInGroup("omarchy-kids")) {
+        return;
+    }
+    var id = action.id;
+    if (id.indexOf("org.freedesktop.DisplayManager") === 0) {
+        return;
+    }
+    if (id === "org.freedesktop.login1.create-session" ||
+        id === "org.freedesktop.login1.release-session" ||
+        id === "org.freedesktop.login1.activate-session") {
+        return;
+    }
+    if (id.indexOf("org.freedesktop.RealtimeKit1") === 0) {
+        return;
+    }
+    if (id.indexOf("org.freedesktop.color-manager") === 0) {
+        return;
+    }
+    return polkit.Result.AUTH_SELF;
+});

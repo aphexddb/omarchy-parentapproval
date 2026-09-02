@@ -27,7 +27,8 @@ This is the app. Check `id -nG` for `omarchy-kids`.
 
 **Kid session:** run the privileged command as usual (`sudo pacman -S cowsay`,
 `pkexec …`, `omarchy pkg add …`). Do not wrap sudo. Do not ask for a password.
-PAM calls `parentapproval pam`; the paired phone buzzes; wait. The
+PAM calls `parentapproval pam` for sudo; a session polkit agent does the same
+for ad-hoc polkit (not login). The paired phone buzzes; wait. The
 Omarchy skill's "type a sudo password / use pkexec because you are an agent"
 rule does not apply here.
 

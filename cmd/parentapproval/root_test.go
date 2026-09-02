@@ -22,7 +22,7 @@ func TestAskDoesNotRequireRoot(t *testing.T) {
 	if commandNeedsRoot("ask") {
 		t.Fatal("ask must not require sudo")
 	}
-	for _, c := range []string{"pending", "status", "pam", "pair-confirm", "pair-abort", "version", "help"} {
+	for _, c := range []string{"pending", "status", "pam", "polkit-agent", "pair-confirm", "pair-abort", "version", "help"} {
 		if commandNeedsRoot(c) {
 			t.Errorf("%s is not a parent control and must stay unprivileged", c)
 		}

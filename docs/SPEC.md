@@ -77,6 +77,19 @@ The package install writes these hooks (and `/etc/sudoers.d/omarchy-kids`).
 Uninstall reverses them: unpatches PAM and removes the sudoers drop-in.
 Kid login accounts are left in place.
 
+Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`.
+`parentapproval pam` refuses login PAM services (`login`, `sddm`, `gdm`, …).
+
+Ad-hoc polkit (pkexec, disks, packagekit — not display-manager or
+`login1.create-session`) uses `/usr/share/polkit-1/rules.d/50-parentapproval.rules`
+so kids `AUTH_SELF` instead of `auth_admin`. The session unit
+`parentapproval-polkit.service` registers an agent for `omarchy-kids` only:
+it shows the same parent-phone request as sudo, with the polkit command
+from `command_line` / `program` / the action message. After allow, the
+agent completes `polkit-agent-helper-1`; PAM redeems the one-shot grant
+so the parent is not asked twice. Wheel sessions leave the Omarchy
+password agent in place.
+
 Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`:
 
 ```

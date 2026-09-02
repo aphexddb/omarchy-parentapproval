@@ -18,6 +18,7 @@ const (
 	sudoersKid      = "/etc/sudoers.d/omarchy-kids"
 	unitName        = "parentapprovald.service"
 	legacyUnitName  = "omarchy-parentapprovald.service"
+	polkitUserUnit  = "parentapproval-polkit.service"
 	skillName       = "parentapproval"
 	legacySkillName = "omarchy-parentapproval"
 )
@@ -59,6 +60,9 @@ func applyHooks() error {
 	if err := installUnit(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: systemd unit not enabled (%v)\n", err)
 	}
+	if err := exec.Command("systemctl", "--global", "enable", polkitUserUnit).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: polkit user agent not enabled (%v)\n", err)
+	}
 	linkSkillsForKids()
 	return nil
 }
@@ -66,6 +70,7 @@ func applyHooks() error {
 func removeHooks() {
 	_ = unpatchPAM("/etc/pam.d/sudo")
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
+	_ = exec.Command("systemctl", "--global", "disable", polkitUserUnit).Run()
 	unlinkInstalledSkills()
 }
 
