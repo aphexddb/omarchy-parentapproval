@@ -152,17 +152,25 @@ func versionNumber() string {
 }
 
 func commitID() string {
-	if commit != "" {
-		return commit
-	}
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, s := range info.Settings {
-			if s.Key == "vcs.revision" && s.Value != "" {
-				return s.Value
+	c := commit
+	if c == "" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, s := range info.Settings {
+				if s.Key == "vcs.revision" && s.Value != "" {
+					c = s.Value
+					break
+				}
 			}
 		}
 	}
-	return ""
+	return shortSHA(c)
+}
+
+func shortSHA(s string) string {
+	if len(s) > 7 {
+		return s[:7]
+	}
+	return s
 }
 
 var geteuid = os.Geteuid

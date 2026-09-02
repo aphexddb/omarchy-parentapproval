@@ -59,7 +59,16 @@ func TestReadVersionPrefersLdflags(t *testing.T) {
 	t.Cleanup(func() { version, commit = oldV, oldC })
 	version = "9.9.9-test"
 	commit = "deadbeefcafebabe"
-	if got := readVersion(); got != "9.9.9-test (deadbeefcafebabe)" {
+	if got := readVersion(); got != "9.9.9-test (deadbee)" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestShortSHA(t *testing.T) {
+	if got := shortSHA("abcdef1"); got != "abcdef1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := shortSHA("abcdef12"); got != "abcdef1" {
 		t.Fatalf("got %q", got)
 	}
 }
