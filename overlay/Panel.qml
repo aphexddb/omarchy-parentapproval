@@ -230,8 +230,13 @@ Item {
       anchors.fill: parent
       focus: true
       Keys.onPressed: function(event) {
+        if (root.pairing && !root.pairBusy && event.key === Qt.Key_Escape) {
+          root.abortPair()
+          event.accepted = true
+          return
+        }
         if (root.pairing && root.pairState === "pending_confirm" && !root.pairBusy) {
-          if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) {
+          if (event.key === Qt.Key_N) {
             root.abortPair()
             event.accepted = true
             return

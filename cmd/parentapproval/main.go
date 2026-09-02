@@ -105,8 +105,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage: parentapproval <command> [args]
 
 Commands:
-  ask --cmd CMD                 ask a parent, then the daemon runs CMD as root
-  pair                          pair a parent phone (root)
+  ask -c CMD [-qr]              ask a parent, then the daemon runs CMD as root
+  pair [-qr]                    pair a parent phone (root)
   status                        show daemon and paired phones
   pending [--json]              list pending requests
   revoke DEVICE_ID              unpair a phone (root)
@@ -333,6 +333,7 @@ func cmdDaemon(args []string) error {
 
 func cmdPair(args []string) error {
 	p := resolvePaths(args)
+	consoleQR := hasQRFlag(args)
 	if err := ensureDaemon(p.socket); err != nil {
 		return err
 	}
@@ -346,12 +347,21 @@ func cmdPair(args []string) error {
 	if url == "" {
 		return fmt.Errorf("daemon did not return a pairing URL")
 	}
-	box, err := qrdisp.Box("Scan with the parent's phone — not the kid's.", url, "Code appears after the phone offers its key")
-	if err != nil {
-		return err
+	if consoleQR {
+		box, err := qrdisp.Box("Scan with the parent's phone — not the kid's.", url, "Code appears after the phone offers its key")
+		if err != nil {
+			return err
+		}
+		fmt.Println(box)
+		if via != "relay" {
+			listen, _ := started["listen"].(string)
+			if listen != "" {
+				fmt.Printf("listen    %s\n", listen)
+			}
+			fmt.Printf("From another device on the LAN:\n  curl -v --max-time 3 %s\n", url)
+		}
 	}
-	fmt.Println(box)
-	overlayOK := presentDisplay(map[string]any{
+	_ = presentDisplay(map[string]any{
 		"kind":   "pair",
 		"user":   "",
 		"cmd":    "Pair a parent phone",
@@ -359,13 +369,6 @@ func cmdPair(args []string) error {
 		"qr_url": url,
 	})
 	defer dismissDisplay()
-	if via != "relay" {
-		listen, _ := started["listen"].(string)
-		if listen != "" {
-			fmt.Printf("listen    %s\n", listen)
-		}
-		fmt.Printf("From another device on the LAN:\n  curl -v --max-time 3 %s\n", url)
-	}
 	fmt.Println("Waiting for a phone…  Ctrl-C to abort.")
 
 	var paired atomic.Bool
@@ -374,6 +377,12 @@ func cmdPair(args []string) error {
 		if paired.Load() {
 			fmt.Fprintln(os.Stderr, "Pairing is done. Enable notifications in the Home Screen app so this phone can buzz.")
 			os.Exit(0)
+		}
+		_, _ = daemon.PairAbort(p.socket, sid)
+	})
+	watchDisplayClose(func() {
+		if paired.Load() {
+			return
 		}
 		_, _ = daemon.PairAbort(p.socket, sid)
 	})
@@ -389,6 +398,8 @@ func cmdPair(args []string) error {
 			name, _ := st["name"].(string)
 			sas, _ := st["sas"].(string)
 			if !prompted {
+				dismissDisplay()
+				watchDisplayClose(nil)
 				if name == "" {
 					name = "a phone"
 				}
@@ -396,11 +407,7 @@ func cmdPair(args []string) error {
 				if sas != "" {
 					fmt.Printf("Laptop code  %s  — this is bound to that phone's key.\n", spaced(sas))
 				}
-				if overlayOK {
-					fmt.Printf("Read the 6 digits off %s and type them on the overlay. A bare Y will not confirm.\n", name)
-				} else {
-					fmt.Printf("Confirm only if %s shows the same 6 digits. Confirm on the phone.\n", name)
-				}
+				fmt.Printf("Confirm only if %s shows the same 6 digits. Confirm on the phone.\n", name)
 				prompted = true
 			}
 			time.Sleep(200 * time.Millisecond)
@@ -426,11 +433,10 @@ func cmdPair(args []string) error {
 			paired.Store(true)
 			dismissDisplay()
 			return waitForPush(p, deviceID, via)
-		case "timeout", "none":
-			if prompted {
-				return fmt.Errorf("pairing aborted")
-			}
+		case "timeout":
 			return fmt.Errorf("pairing timed out")
+		case "none":
+			return fmt.Errorf("pairing aborted")
 		}
 	}
 }
@@ -517,7 +523,7 @@ func pairSIDArg(args []string) string {
 func pairConfirmArgs(args []string) (sid, sas string) {
 	var pos []string
 	for _, a := range args {
-		if a == "--dev" || strings.HasPrefix(a, "--") {
+		if a == "--dev" || a == "-qr" || a == "--qr" || strings.HasPrefix(a, "--") {
 			continue
 		}
 		pos = append(pos, a)
@@ -554,42 +560,76 @@ func isPairSAS(s string) bool {
 
 func cmdAsk(args []string) error {
 	p := resolvePaths(args)
-	userName := currentUser()
-	cmd := ""
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--user":
-			// Ignored unless the process is root: the daemon takes the
-			// username from SO_PEERCRED so a kid cannot spoof attribution.
-			i++
-			if i < len(args) {
-				userName = args[i]
-			}
-		case "--cmd":
-			i++
-			if i < len(args) {
-				cmd = args[i]
-			}
-		case "--":
-			cmd = strings.Join(args[i+1:], " ")
-			i = len(args)
-		}
-	}
-	if cmd == "" {
-		return fmt.Errorf("usage: %s ask --cmd \"pacman -S cowsay\"", cliName)
+	opts, err := parseAskArgs(args)
+	if err != nil {
+		return err
 	}
 	if err := ensureDaemon(p.socket); err != nil {
 		return err
 	}
 	cwd, _ := os.Getwd()
-	created, err := daemon.Create(p.socket, userName, "sudo", cwd, cmd, protocol.DefaultAskTTL)
+	created, err := daemon.Create(p.socket, opts.user, "sudo", cwd, opts.cmd, protocol.DefaultAskTTL)
 	if err != nil {
 		return err
 	}
-	if err := presentAndWait(p.socket, created); err != nil {
+	if err := presentAndWait(p.socket, created, waitUI{printQR: opts.qr, liveTimer: true}); err != nil {
 		return err
 	}
-	return runApproved(p.socket, userName, cmd)
+	return runApproved(p.socket, opts.user, opts.cmd)
+}
+
+type askOpts struct {
+	user string
+	cmd  string
+	qr   bool
+}
+
+func parseAskArgs(args []string) (askOpts, error) {
+	opts := askOpts{user: currentUser()}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--user":
+			// Ignored unless the process is root: the daemon takes the
+			// username from SO_PEERCRED so a kid cannot spoof attribution.
+			i++
+			if i < len(args) {
+				opts.user = args[i]
+			}
+		case a == "-qr" || a == "--qr":
+			opts.qr = true
+		case a == "-c" || a == "--cmd":
+			i++
+			if i >= len(args) {
+				return opts, fmt.Errorf("usage: %s ask -c \"pacman -S cowsay\"", cliName)
+			}
+			opts.cmd = args[i]
+		case strings.HasPrefix(a, "--cmd="):
+			opts.cmd = strings.TrimPrefix(a, "--cmd=")
+		case strings.HasPrefix(a, "-c") && len(a) > 2 && !strings.HasPrefix(a, "--"):
+			opts.cmd = a[2:]
+		case a == "--":
+			opts.cmd = strings.Join(args[i+1:], " ")
+			return opts, requireAskCmd(opts)
+		}
+	}
+	return opts, requireAskCmd(opts)
+}
+
+func requireAskCmd(opts askOpts) error {
+	if opts.cmd == "" {
+		return fmt.Errorf("usage: %s ask -c \"pacman -S cowsay\"", cliName)
+	}
+	return nil
+}
+
+func hasQRFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-qr" || a == "--qr" {
+			return true
+		}
+	}
+	return false
 }
 
 func cmdPam() error {
@@ -631,25 +671,32 @@ func cmdPam() error {
 		// pam_exec stdout would paint a QR into the stock polkit dialog.
 		return waitForParent(p.socket, created)
 	}
-	return presentAndWait(p.socket, created)
+	return presentAndWait(p.socket, created, waitUI{printQR: true, liveTimer: true})
 }
 
-func presentAndWait(socket string, created map[string]any) error {
+type waitUI struct {
+	printQR   bool
+	liveTimer bool
+}
+
+func presentAndWait(socket string, created map[string]any, ui waitUI) error {
 	rid, _ := created["rid"].(string)
 	url, _ := created["qr_url"].(string)
 	match, _ := created["match"].(string)
 	cmd, _ := created["cmd"].(string)
 	userName, _ := created["user"].(string)
 
-	box, err := qrdisp.Box(
-		fmt.Sprintf("%s wants to run:\n  %s", userName, cmd),
-		url,
-		"Match  "+match+"   ·   parent phone only",
-	)
-	if err != nil {
-		return err
+	if ui.printQR {
+		box, err := qrdisp.Box(
+			fmt.Sprintf("%s wants to run:\n  %s", userName, cmd),
+			url,
+			"Match  "+match+"   ·   parent phone only",
+		)
+		if err != nil {
+			return err
+		}
+		fmt.Println(box)
 	}
-	fmt.Println(box)
 	overlayOK := presentDisplay(created)
 	defer dismissDisplay()
 
@@ -658,10 +705,12 @@ func presentAndWait(socket string, created map[string]any) error {
 		_, _ = daemon.Cancel(socket, rid)
 	})
 
-	result, err := waitResult(socket, rid)
+	deadline := createdDeadline(created)
+	waited, err := waitAskResult(socket, rid, deadline, ui.liveTimer)
 	if err != nil {
 		return err
 	}
+	result, _ := waited["result"].(string)
 	switch result {
 	case "allow":
 		fmt.Println("Parent approved.")
@@ -674,8 +723,94 @@ func presentAndWait(socket string, created map[string]any) error {
 	case "cancel":
 		return fmt.Errorf("cancelled")
 	default:
+		notifyTimeout(userName, cmd)
 		return fmt.Errorf("timed out waiting for a parent")
 	}
+}
+
+func createdDeadline(created map[string]any) time.Time {
+	switch v := created["exp"].(type) {
+	case float64:
+		return time.Unix(int64(v), 0)
+	case int64:
+		return time.Unix(v, 0)
+	case int:
+		return time.Unix(int64(v), 0)
+	default:
+		return time.Now().Add(time.Duration(protocol.DefaultAskTTL) * time.Second)
+	}
+}
+
+func waitAskResult(socket, rid string, deadline time.Time, liveTimer bool) (map[string]any, error) {
+	type outcome struct {
+		waited map[string]any
+		err    error
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		waited, err := daemon.Wait(socket, rid)
+		ch <- outcome{waited, err}
+	}()
+	if !liveTimer {
+		res := <-ch
+		return res.waited, res.err
+	}
+
+	tty := stdoutIsTTY()
+	if tty {
+		writeAskWaitLine(os.Stdout, time.Until(deadline), true)
+	} else {
+		fmt.Println(askWaitMessage(time.Until(deadline)))
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case res := <-ch:
+			if tty {
+				clearAskWaitLine(os.Stdout)
+			}
+			return res.waited, res.err
+		case <-ticker.C:
+			if tty {
+				writeAskWaitLine(os.Stdout, time.Until(deadline), true)
+			}
+		}
+	}
+}
+
+func askWaitMessage(remaining time.Duration) string {
+	if remaining < 0 {
+		remaining = 0
+	}
+	return fmt.Sprintf("Waiting on parent to approve  %s", formatCountdown(remaining))
+}
+
+func formatCountdown(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int(d.Round(time.Second).Seconds())
+	return fmt.Sprintf("%d:%02d", sec/60, sec%60)
+}
+
+func writeAskWaitLine(w io.Writer, remaining time.Duration, tty bool) {
+	msg := askWaitMessage(remaining)
+	if !tty {
+		fmt.Fprintln(w, msg)
+		return
+	}
+	fmt.Fprintf(w, "\r%s\033[K", msg)
+}
+
+func clearAskWaitLine(w io.Writer) {
+	fmt.Fprint(w, "\r\033[K")
+}
+
+func stdoutIsTTY() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // waitForParent waits for the phone with no laptop QR, overlay, or stdout.
@@ -702,6 +837,7 @@ func waitForParent(socket string, created map[string]any) error {
 	case "cancel":
 		return fmt.Errorf("cancelled")
 	default:
+		notifyTimeout(userName, cmd)
 		return fmt.Errorf("timed out waiting for a parent")
 	}
 }
@@ -951,9 +1087,26 @@ func readCwd(pid int) string {
 }
 
 var (
-	displayMu sync.Mutex
-	imvCmd    *exec.Cmd
+	displayMu          sync.Mutex
+	imvCmd             *exec.Cmd
+	displayCloseFn     func()
+	displayCloseFnLock sync.Mutex
 )
+
+func watchDisplayClose(fn func()) {
+	displayCloseFnLock.Lock()
+	displayCloseFn = fn
+	displayCloseFnLock.Unlock()
+}
+
+func displayClosedByUser() {
+	displayCloseFnLock.Lock()
+	fn := displayCloseFn
+	displayCloseFnLock.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
 
 func overlayPayload(created map[string]any) (string, error) {
 	url, _ := created["qr_url"].(string)
@@ -1004,6 +1157,15 @@ func notifyDenied(userName, cmd string) {
 		fmt.Sprintf("%s wanted to run %s", userName, cmd))
 }
 
+func notifyTimeout(userName, cmd string) {
+	if !binExists("/usr/bin/omarchy-notification-send") {
+		return
+	}
+	_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰔛",
+		"Parent didn't respond",
+		fmt.Sprintf("No one approved %s for %s", cmd, userName))
+}
+
 func summonOverlay(created map[string]any) bool {
 	if !binExists("/usr/bin/omarchy-shell") {
 		return false
@@ -1044,10 +1206,14 @@ func showPNG(url string) {
 	go func() {
 		_ = cmd.Wait()
 		displayMu.Lock()
-		if imvCmd == cmd {
+		closedByUser := imvCmd == cmd
+		if closedByUser {
 			imvCmd = nil
 		}
 		displayMu.Unlock()
+		if closedByUser {
+			displayClosedByUser()
+		}
 	}()
 }
 
@@ -1066,8 +1232,9 @@ func killImvLocked() {
 	if imvCmd == nil || imvCmd.Process == nil {
 		return
 	}
-	_ = imvCmd.Process.Kill()
+	cmd := imvCmd
 	imvCmd = nil
+	_ = cmd.Process.Kill()
 }
 
 func execCommand(name string, args ...string) error {
