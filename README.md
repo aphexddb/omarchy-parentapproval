@@ -8,6 +8,12 @@ A community extra for Omarchy: for parents, by parents.
 
 Agents: load [SKILL.md](default/agents/skills/parentapproval/SKILL.md) (or run `sudo parentapproval install-skills`).
 
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aphexddb/omarchy-parentapproval/main/install.sh | bash
+```
+
 First time setup after the package is installed:
 ```bash
 sudo parentapproval pair
