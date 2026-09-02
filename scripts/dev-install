@@ -46,7 +46,7 @@ echo
 echo "Next:"
 echo "  sudo /usr/bin/parentapproval pair"
 echo "  sudo /usr/bin/parentapproval setup-kid <kid-username>"
-echo "  /usr/bin/parentapproval ask --cmd \"pacman -S cowsay\""
+echo "  /usr/bin/parentapproval ask -c \"pacman -S cowsay\""
 echo
 echo "This checkout's bin/ may shadow PATH. Use /usr/bin/parentapproval."
 echo "Remove with:  $(dirname "$0")/dev-uninstall"

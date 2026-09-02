@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func restoreDisplayHooks(t *testing.T) {
@@ -21,6 +22,7 @@ func restoreDisplayHooks(t *testing.T) {
 		execCommandOutput = oldOut
 		execStart = oldStart
 		execCommandContext = oldCtx
+		watchDisplayClose(nil)
 		displayMu.Lock()
 		imvCmd = nil
 		displayMu.Unlock()
@@ -174,6 +176,26 @@ func TestNotifyDeniedSendsNotification(t *testing.T) {
 	}
 }
 
+func TestNotifyTimeoutSendsNotification(t *testing.T) {
+	restoreDisplayHooks(t)
+	var started []string
+	binExists = func(path string) bool {
+		return path == "/usr/bin/omarchy-notification-send"
+	}
+	execCommandContext = func(ctx context.Context, name string, args ...string) error {
+		started = append(started, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	notifyTimeout("gardiner", "pacman -S cowsay")
+	joined := strings.Join(started, "\n")
+	if !strings.Contains(joined, "omarchy-notification-send") {
+		t.Fatalf("timeout should send a desktop notification: %q", joined)
+	}
+	if !strings.Contains(joined, "Parent didn't respond") || !strings.Contains(joined, "pacman -S cowsay") {
+		t.Fatalf("timeout notification %q", joined)
+	}
+}
+
 func TestPresentDisplayPrefersOverlay(t *testing.T) {
 	restoreDisplayHooks(t)
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -245,6 +267,49 @@ func TestDismissDisplayHidesOverlay(t *testing.T) {
 	}
 }
 
+func TestImvUserCloseSignals(t *testing.T) {
+	restoreDisplayHooks(t)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	closed := make(chan struct{}, 1)
+	watchDisplayClose(func() { closed <- struct{}{} })
+	binExists = func(path string) bool { return path == "/usr/bin/imv" }
+	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "unknown\n", nil
+	}
+	execStart = func(name string, args ...string) (*exec.Cmd, error) {
+		cmd := exec.Command("true")
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		return cmd, nil
+	}
+	showPNG("https://parentapprovals.com/p/abc")
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the QR window should abort pairing")
+	}
+}
+
+func TestDismissDisplayDoesNotSignalUserClose(t *testing.T) {
+	restoreDisplayHooks(t)
+	signaled := false
+	watchDisplayClose(func() { signaled = true })
+	binExists = func(path string) bool { return false }
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	displayMu.Lock()
+	imvCmd = cmd
+	displayMu.Unlock()
+	dismissDisplay()
+	time.Sleep(50 * time.Millisecond)
+	if signaled {
+		t.Fatal("killing the QR window ourselves must not abort pairing")
+	}
+}
+
 func TestDismissDisplayKillsImv(t *testing.T) {
 	restoreDisplayHooks(t)
 	binExists = func(path string) bool { return false }
@@ -281,6 +346,7 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		"Type the 6-digit code from the phone",
 		"A Y keystroke will not confirm",
 		"text: \"Confirm\"",
+		`root.pairing && !root.pairBusy && event.key === Qt.Key_Escape`,
 		"function playVerdict",
 		"id: verdictBadge",
 		"id: verdictAnim",

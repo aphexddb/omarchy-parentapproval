@@ -153,7 +153,7 @@ func Verify(pub ed25519.PublicKey, canonical, sig []byte) bool {
 }
 
 // StripLeadingSudo removes a leading sudo/pkexec (and a following --) so
-// `ask --cmd "sudo echo hi"` and `sudo echo hi` hash to the same inner command.
+// `ask -c "sudo echo hi"` and `sudo echo hi` hash to the same inner command.
 func StripLeadingSudo(cmd string) string {
 	s := strings.TrimSpace(cmd)
 	for {

@@ -22,7 +22,7 @@ sudo parentapproval setup-kid milo
 
 Example of asking for approval (no side effects!)
 ```bash
-parentapproval ask --cmd "sudo id"
+parentapproval ask -c "sudo id"
 ```
 
 ## How it works
@@ -75,7 +75,7 @@ Unprivileged (`--dev` is local HTTP, no PAM):
 ```bash
 parentapproval daemon --dev      # terminal 1
 sudo parentapproval pair --dev   # terminal 2, scan
-parentapproval ask --dev --cmd "pacman -S cowsay"
+parentapproval ask --dev -c "pacman -S cowsay"
 ```
 
 Headless pair + allow/deny against the production relay image (no phone):
@@ -98,7 +98,7 @@ parentapproval daemon --dev --relay http://127.0.0.1:8080
 Against the installed systemd daemon (phone already paired):
 
 ```bash
-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask -c "pacman -S cowsay"
 ```
 
 After a parent approves, the daemon runs that command as root. No sudo password.
@@ -107,7 +107,7 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 
 | Command | What it does |
 |---|---|
-| `parentapproval ask --cmd "…"` | Ask a parent; daemon runs the command as root |
+| `parentapproval ask -c "…"` | Ask a parent; daemon runs the command as root |
 | `sudo parentapproval pair` | Pair a parent phone |
 | `sudo parentapproval setup-kid NAME` | Creates a user (or adds them to omarchy-kids) and sets a login password. That password cannot sudo. |
 | `sudo parentapproval disable` | Remove PAM hooks without uninstalling |

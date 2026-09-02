@@ -41,6 +41,15 @@ func TestUsageOmitsEnable(t *testing.T) {
 	if !strings.Contains(s, "disable") {
 		t.Fatal("disable should remain to turn hooks off without uninstalling")
 	}
+	if !strings.Contains(s, "ask -c CMD") {
+		t.Fatal("ask should document bash-style -c")
+	}
+	if strings.Contains(s, "ask --cmd") {
+		t.Fatal("usage should prefer -c over --cmd")
+	}
+	if !strings.Contains(s, "pair [-qr]") || !strings.Contains(s, "ask -c CMD [-qr]") {
+		t.Fatal("usage should document -qr as opt-in terminal QR")
+	}
 }
 
 func TestReadVersionUsesVERSIONWhenUnset(t *testing.T) {
