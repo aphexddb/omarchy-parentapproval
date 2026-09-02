@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "parentapproval",
   "name": "Parent Approve",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "parentapproval",
   "description": "Overlay shown while a kid waits for a parent phone to approve sudo",
   "homepage": "https://github.com/aphexddb/omarchy-parentapproval",
