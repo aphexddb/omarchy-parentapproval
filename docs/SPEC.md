@@ -164,8 +164,8 @@ Ad-hoc polkit (pkexec, disks, packagekit — not display-manager or
 so kids `AUTH_SELF` instead of `auth_admin`. The session unit
 `parentapproval-polkit.service` registers an agent for `omarchy-kids` only:
 it phones the parent with the polkit command from `command_line` /
-`program` / the action message and waits with **no laptop QR, overlay, or
-imv**. After allow, the agent completes `polkit-agent-helper-1`; PAM
+`program` / the action message and waits with **no laptop QR or overlay**.
+After allow, the agent completes `polkit-agent-helper-1`; PAM
 redeems the one-shot grant so the parent is not asked twice. The grant is
 bound to the polkit action id and cookie; `RedeemService` must present
 both. Wheel sessions leave the Omarchy password agent in place. A polkit

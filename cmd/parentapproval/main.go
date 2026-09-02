@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -361,7 +360,7 @@ func cmdPair(args []string) error {
 			fmt.Printf("From another device on the LAN:\n  curl -v --max-time 3 %s\n", url)
 		}
 	}
-	_ = presentDisplay(map[string]any{
+	overlayOK := presentDisplay(map[string]any{
 		"kind":   "pair",
 		"user":   "",
 		"cmd":    "Pair a parent phone",
@@ -369,6 +368,10 @@ func cmdPair(args []string) error {
 		"qr_url": url,
 	})
 	defer dismissDisplay()
+	if !consoleQR && !overlayOK {
+		fmt.Printf("Open on the parent phone:\n  %s\n", url)
+		fmt.Println("Pass -qr for a terminal QR.")
+	}
 	fmt.Println("Waiting for a phone…  Ctrl-C to abort.")
 
 	var paired atomic.Bool
@@ -377,12 +380,6 @@ func cmdPair(args []string) error {
 		if paired.Load() {
 			fmt.Fprintln(os.Stderr, "Pairing is done. Enable notifications in the Home Screen app so this phone can buzz.")
 			os.Exit(0)
-		}
-		_, _ = daemon.PairAbort(p.socket, sid)
-	})
-	watchDisplayClose(func() {
-		if paired.Load() {
-			return
 		}
 		_, _ = daemon.PairAbort(p.socket, sid)
 	})
@@ -398,8 +395,6 @@ func cmdPair(args []string) error {
 			name, _ := st["name"].(string)
 			sas, _ := st["sas"].(string)
 			if !prompted {
-				dismissDisplay()
-				watchDisplayClose(nil)
 				if name == "" {
 					name = "a phone"
 				}
@@ -1086,28 +1081,6 @@ func readCwd(pid int) string {
 	return cwd
 }
 
-var (
-	displayMu          sync.Mutex
-	imvCmd             *exec.Cmd
-	displayCloseFn     func()
-	displayCloseFnLock sync.Mutex
-)
-
-func watchDisplayClose(fn func()) {
-	displayCloseFnLock.Lock()
-	displayCloseFn = fn
-	displayCloseFnLock.Unlock()
-}
-
-func displayClosedByUser() {
-	displayCloseFnLock.Lock()
-	fn := displayCloseFn
-	displayCloseFnLock.Unlock()
-	if fn != nil {
-		fn()
-	}
-}
-
 func overlayPayload(created map[string]any) (string, error) {
 	url, _ := created["qr_url"].(string)
 	matrix, err := qrdisp.Matrix(url)
@@ -1137,15 +1110,10 @@ func overlayPayload(created map[string]any) (string, error) {
 }
 
 func presentDisplay(created map[string]any) bool {
-	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
+	if !canPresentDisplay() {
 		return false
 	}
-	if summonOverlay(created) {
-		return true
-	}
-	url, _ := created["qr_url"].(string)
-	showPNG(url)
-	return false
+	return summonOverlay(created)
 }
 
 func notifyDenied(userName, cmd string) {
@@ -1174,67 +1142,29 @@ func summonOverlay(created map[string]any) bool {
 	if err != nil {
 		return false
 	}
+	if trySummonOverlay(payload) {
+		return true
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_, _ = execCommandOutput(ctx, "/usr/bin/omarchy-shell", "shell", "rescanPlugins")
+	cancel()
+	return trySummonOverlay(payload)
+}
+
+func trySummonOverlay(payload string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := execCommandOutput(ctx, "omarchy-shell", "shell", "summon", "parentapproval", payload)
+	out, err := execCommandOutput(ctx, "/usr/bin/omarchy-shell", "shell", "summon", "parentapproval", payload)
 	return err == nil && strings.TrimSpace(out) == "ok"
 }
 
-func showPNG(url string) {
-	if os.Getenv("WAYLAND_DISPLAY") == "" {
-		return
-	}
-	if !binExists("/usr/bin/imv") {
-		return
-	}
-	png, err := qrdisp.PNG(url, 512)
-	if err != nil {
-		return
-	}
-	path := filepath.Join(os.TempDir(), "parentapproval.png")
-	if err := os.WriteFile(path, png, 0o644); err != nil {
-		return
-	}
-	displayMu.Lock()
-	defer displayMu.Unlock()
-	killImvLocked()
-	cmd, err := execStart("imv", "-w", "omarchy-parent-qr", path)
-	if err != nil {
-		return
-	}
-	imvCmd = cmd
-	go func() {
-		_ = cmd.Wait()
-		displayMu.Lock()
-		closedByUser := imvCmd == cmd
-		if closedByUser {
-			imvCmd = nil
-		}
-		displayMu.Unlock()
-		if closedByUser {
-			displayClosedByUser()
-		}
-	}()
-}
-
 func dismissDisplay() {
-	if binExists("/usr/bin/omarchy-shell") {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, _ = execCommandOutput(ctx, "omarchy-shell", "shell", "hide", "parentapproval")
-		cancel()
-	}
-	displayMu.Lock()
-	killImvLocked()
-	displayMu.Unlock()
-}
-
-func killImvLocked() {
-	if imvCmd == nil || imvCmd.Process == nil {
+	if !binExists("/usr/bin/omarchy-shell") {
 		return
 	}
-	cmd := imvCmd
-	imvCmd = nil
-	_ = cmd.Process.Kill()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_, _ = execCommandOutput(ctx, "/usr/bin/omarchy-shell", "shell", "hide", "parentapproval")
+	cancel()
 }
 
 func execCommand(name string, args ...string) error {

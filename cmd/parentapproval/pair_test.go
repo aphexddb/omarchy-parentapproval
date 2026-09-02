@@ -38,8 +38,9 @@ func TestPairWaitsForPhoneConfirmAndPush(t *testing.T) {
 		"waitForPush",
 		"Notifications on",
 		"hasQRFlag",
-		"watchDisplayClose",
 		"pairing aborted",
+		"Open on the parent phone",
+		"presentDisplay",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("pair flow missing %q", want)
@@ -48,12 +49,16 @@ func TestPairWaitsForPhoneConfirmAndPush(t *testing.T) {
 	if !strings.Contains(s, "if consoleQR") {
 		t.Error("pair must only print a terminal QR when -qr is set")
 	}
+	if strings.Contains(s, "showPNG") || strings.Contains(s, "imv") {
+		t.Error("pair must not use the imv QR window")
+	}
 	pendingIdx := strings.Index(s, `case "pending_confirm"`)
-	if pendingIdx < 0 {
+	doneIdx := strings.Index(s, `case "done"`)
+	if pendingIdx < 0 || doneIdx < pendingIdx {
 		t.Fatal("pair missing pending_confirm")
 	}
-	if !strings.Contains(s[pendingIdx:], "dismissDisplay()") {
-		t.Error("pair must dismiss the QR overlay as soon as a phone offers a key")
+	if strings.Contains(s[pendingIdx:doneIdx], "dismissDisplay()") {
+		t.Error("pair must keep the overlay up so the parent can type the phone code")
 	}
 }
 
