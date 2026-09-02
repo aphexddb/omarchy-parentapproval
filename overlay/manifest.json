@@ -7,9 +7,7 @@
   "description": "Overlay shown while a kid waits for a parent phone to approve sudo",
   "homepage": "https://github.com/aphexddb/omarchy-parentapproval",
   "license": "MIT",
-  "kinds": [
-    "overlay"
-  ],
+  "kinds": ["overlay"],
   "keepLoaded": false,
   "entryPoints": {
     "overlay": "Panel.qml"
