@@ -843,7 +843,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int, action, cookie
 	d.fanoutWatch(watchEvent{Kind: "ask", URL: url, RID: r.RID})
 	if d.relay != nil && via == "relay" {
 		title := "Parent Approval"
-		body := fmt.Sprintf("%s wants to run %s", r.User, r.Cmd)
+		body := "A privileged command is waiting for your approval."
 		go func() {
 			if err := d.relay.Notify("", title, body, url); err != nil {
 				log.Printf("relay notify: %v", err)
@@ -1062,19 +1062,39 @@ func (d *Daemon) Status() (map[string]any, error) {
 
 func (d *Daemon) requestJSON(r *Request) protocol.Request {
 	return protocol.Request{
-		V:        protocol.Version,
-		RID:      r.RID,
-		Nonce:    protocol.B64(r.Nonce),
-		Exp:      r.Exp.Unix(),
-		Match:    r.Match,
-		HostName: d.HostName(),
-		HostID:   d.HostID(),
-		User:     r.User,
-		Service:  r.Service,
-		CWD:      r.CWD,
-		Cmd:      r.Cmd,
-		CmdHash:  protocol.B64(r.CmdHash),
+		V:       protocol.Version,
+		RID:     r.RID,
+		Nonce:   protocol.B64(r.Nonce),
+		Exp:     r.Exp.Unix(),
+		Match:   r.Match,
+		HostID:  d.HostID(),
+		Service: r.Service,
+		CmdHash: protocol.B64(r.CmdHash),
+		Sealed:  d.sealAsk(r.User, r.CWD, r.Cmd),
 	}
+}
+
+func (d *Daemon) sealAsk(user, cwd, cmd string) map[string]string {
+	fields := protocol.AskFields{
+		User:     user,
+		CWD:      cwd,
+		Cmd:      cmd,
+		HostName: d.HostName(),
+	}
+	out := map[string]string{}
+	for _, p := range d.store.ListParents() {
+		raw, err := protocol.DecodeB64(p.PubKey)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			continue
+		}
+		blob, err := protocol.SealAsk(fields, ed25519.PublicKey(raw))
+		if err != nil {
+			log.Printf("seal ask for %s: %v", p.DeviceID, err)
+			continue
+		}
+		out[p.DeviceID] = blob
+	}
+	return out
 }
 
 func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {

@@ -30,6 +30,42 @@ function cmdHash(user, service, cwd, cmd) {
   return b64url(digest);
 }
 
+// Ed25519 seed → X25519 secret (clamped SHA-512). Matches Go protocol.Ed25519SeedToX25519.
+function ed25519SeedToX25519(sk) {
+  const seed = sk.length >= 32 ? sk.subarray(0, 32) : sk;
+  const h = nacl.hash(seed);
+  h[0] &= 248;
+  h[31] &= 127;
+  h[31] |= 64;
+  return h.subarray(0, 32);
+}
+
+// Open a daemon SealAsk blob: ephemeral_pub (32) || nonce (24) || nacl.box ciphertext.
+function openSealed(blobB64, sk) {
+  const raw = b64urlToBytes(blobB64);
+  if (raw.length < 32 + 24 + 16) throw new Error("bad sealed ask");
+  const eph = raw.subarray(0, 32);
+  const nonce = raw.subarray(32, 56);
+  const ct = raw.subarray(56);
+  const plain = nacl.box.open(ct, nonce, eph, ed25519SeedToX25519(sk));
+  if (!plain) throw new Error("could not decrypt ask");
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+function revealAsk(req, rec) {
+  if (req.sealed && rec && rec.device_id && rec.secret && req.sealed[rec.device_id]) {
+    const fields = openSealed(req.sealed[rec.device_id], b64urlToBytes(rec.secret));
+    req.user = fields.user;
+    req.cwd = fields.cwd;
+    req.cmd = fields.cmd;
+    req.host_name = fields.host_name || req.host_name;
+    return;
+  }
+  if (!req.cmd || !req.user) {
+    throw new Error("This ask has no command we can decrypt. Re-pair or update the laptop.");
+  }
+}
+
 // PairSAS matches Go protocol.PairSAS: SHA-256 of OMARCHY-SAS/1\n<sid>\n<pubkey>\n
 // mapped to 6 decimal digits with rejection sampling (bytes 250–255 skipped).
 function pairSAS(sid, pubkeyB64) {
@@ -904,6 +940,23 @@ async function bootApprove(rid) {
     return;
   }
   const req = await res.json();
+  const rec = await loadRecord(req.host_id);
+  if (!rec) {
+    $("host").textContent = req.host_name || "unknown host";
+    $("unpaired").classList.remove("hidden");
+    $("approve-btn").disabled = true;
+    $("actions").classList.add("hidden");
+    return;
+  }
+  try {
+    revealAsk(req, rec);
+  } catch (e) {
+    banner($("approve-err"), "err", e.message || String(e));
+    $("approve-btn").disabled = true;
+    $("deny-btn").disabled = true;
+    $("host").textContent = req.host_name || "";
+    return;
+  }
   $("host").textContent = req.host_name;
   $("who").textContent = req.user + " · " + req.service;
   $("cmd").textContent = req.cmd;
@@ -913,13 +966,6 @@ async function bootApprove(rid) {
     banner($("approve-err"), "err", "Request was tampered with in transit. Do not approve.");
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
-    return;
-  }
-  const rec = await loadRecord(req.host_id);
-  if (!rec) {
-    $("unpaired").classList.remove("hidden");
-    $("approve-btn").disabled = true;
-    $("actions").classList.add("hidden");
     return;
   }
   const tick = () => {

@@ -161,11 +161,12 @@ type Request struct {
 	Match    string `json:"match"`
 	HostName string `json:"host_name"`
 	HostID   string `json:"host_id"`
-	User     string `json:"user"`
-	Service  string `json:"service"`
-	CWD      string `json:"cwd"`
-	Cmd      string `json:"cmd"`
-	CmdHash  string `json:"cmd_hash"`
+	User     string            `json:"user"`
+	Service  string            `json:"service"`
+	CWD      string            `json:"cwd"`
+	Cmd      string            `json:"cmd"`
+	CmdHash  string            `json:"cmd_hash"`
+	Sealed   map[string]string `json:"sealed,omitempty"`
 }
 
 // Decision is the JSON body for POST /a/{rid}/decision.

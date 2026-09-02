@@ -53,6 +53,47 @@ func startTestDaemon(t *testing.T) (*Daemon, string) {
 	return nil, ""
 }
 
+func getAsk(t *testing.T, askURL string, priv ed25519.PrivateKey, deviceID string) protocol.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, askURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("GET ask %s %s", res.Status, b)
+	}
+	var body protocol.Request
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.User != "" || body.Cmd != "" || body.CWD != "" || body.HostName != "" {
+		t.Fatalf("ask leaked plaintext to the wire: %+v", body)
+	}
+	if deviceID == "" || priv == nil {
+		return body
+	}
+	blob, ok := body.Sealed[deviceID]
+	if !ok {
+		t.Fatalf("missing sealed blob for %s: %#v", deviceID, body.Sealed)
+	}
+	fields, err := protocol.OpenAsk(blob, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.User = fields.User
+	body.CWD = fields.CWD
+	body.Cmd = fields.Cmd
+	body.HostName = fields.HostName
+	return body
+}
+
 func enrollParent(t *testing.T, d *Daemon) (ed25519.PrivateKey, string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -84,25 +125,7 @@ func TestApproveAndReplay(t *testing.T) {
 		t.Fatalf("bad create: %#v", created)
 	}
 
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Accept", "application/json")
-	res, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		t.Fatalf("GET %s", res.Status)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	if body.User != "milo" || body.Cmd != "pacman -S steam" {
 		t.Fatalf("request %+v", body)
 	}
@@ -144,22 +167,14 @@ func TestApproveAndReplay(t *testing.T) {
 
 func TestUnpairedCannotAllow(t *testing.T) {
 	d, sock := startTestDaemon(t)
-	enrollParent(t, d)
+	priv, deviceID := enrollParent(t, d)
 	created, err := Create(sock, "maya", "sudo", "/", "true", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
 	_, stranger, _ := ed25519.GenerateKey(nil)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	var body protocol.Request
-	_ = json.NewDecoder(res.Body).Decode(&body)
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(stranger, canon)
 	dec := protocol.Decision{V: 1, DeviceID: "stranger", Decision: "allow", Signature: protocol.B64(sig)}
@@ -182,15 +197,7 @@ func TestCommandSwapRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	var body protocol.Request
-	_ = json.NewDecoder(res.Body).Decode(&body)
+	body := getAsk(t, url, priv, deviceID)
 	evil := protocol.B64(protocol.CmdHash(body.User, body.Service, body.CWD, "visudo"))
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, evil)
 	sig := protocol.Sign(priv, canon)
@@ -483,18 +490,7 @@ func TestRedeemAfterAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ = created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -532,18 +528,7 @@ func TestRedeemPolkitServiceAfterAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -580,18 +565,7 @@ func TestRedeemPolkitRequiresActionAndCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -642,18 +616,7 @@ func TestExecGrantRunsApprovedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -922,21 +885,7 @@ func TestRelayPairAndAsk(t *testing.T) {
 	if !strings.Contains(askURL, "/p/") {
 		t.Fatalf("ask url %s", askURL)
 	}
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/a/"+rid, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		b, _ := io.ReadAll(res.Body)
-		t.Fatalf("GET ask %s %s", res.Status, b)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
+	body := getAsk(t, ts.URL+"/a/"+rid, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}

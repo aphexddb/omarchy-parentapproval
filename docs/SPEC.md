@@ -73,7 +73,11 @@ The relay looks up which laptop owns `sid`/`rid` (from WSS `open`) and proxies t
 
 ## Approval
 
-`GET /a/{rid}` (`Accept: application/json`) returns the request. `POST /a/{rid}/decision` with `{v, device_id, decision, sig}`. The server rebuilds canonical bytes from **stored** fields and verifies against the enrolled parent pubkey. First valid decision spends `rid`. Unauthenticated `deny` is allowed (kid cancel / panic). Unauthenticated `allow` is not.
+`GET /a/{rid}` (`Accept: application/json`) returns the request. Cleartext
+`user`, `cwd`, `cmd`, and `host_name` are omitted. Instead `sealed` is a map of
+`device_id` → NaCl box of `{"user","cwd","cmd","host_name"}` (X25519 from the
+enrolled Ed25519 key; blob is `ephemeral_pub || nonce || ciphertext`, unpadded
+base64url). The phone decrypts, displays, and hashes those fields. `POST /a/{rid}/decision` with `{v, device_id, decision, sig}`. The server rebuilds canonical bytes from **stored** fields and verifies against the enrolled parent pubkey. First valid decision spends `rid`. Unauthenticated `deny` is allowed (kid cancel / panic). Unauthenticated `allow` is not.
 
 TTL 120s. One outstanding request per user; a new one cancels the old.
 

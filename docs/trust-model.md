@@ -34,8 +34,14 @@ mitigation; it is not shipped yet.
 | Actor | Can forge an `allow`? | Can see command text? | Can replace phone code? |
 |---|---|---|---|
 | Compromised laptop | No (key is on the phone) | Yes (it created the ask) | No |
-| Passive network | No (TLS to the relay) | No (TLS) | No |
-| Relay operator | Yes, by serving hostile JS | Yes, today (see F-06) | Yes |
+| Passive network | No (TLS to the relay) | No (TLS + sealed ask) | No |
+| Relay operator | Yes, by serving hostile JS | No (user/cwd/cmd/host sealed to the phone) | Yes |
 
 The relay holds only parent public keys. It cannot *itself* sign. Its power
 is that it is the code-delivery point and the message bus.
+
+Ask fields `user`, `cwd`, `cmd`, and `host_name` are NaCl-boxed to each paired
+phone so a hosted relay proxies opaque blobs. Approvals are still Ed25519 over
+`cmd_hash` of the plaintext the phone decrypted. The relay still sees metadata
+(`rid`, `service`, match digits, timing). Web-push bodies are generic and do
+not include the command. Self-host if the remaining metadata is too much.
