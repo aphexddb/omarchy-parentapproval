@@ -285,6 +285,44 @@ function wireNotifyButton(btn, hostId, deviceId, msgEl) {
   };
 }
 
+function pairTokenFromPath() {
+  const path = location.pathname.replace(/\/+$/, "");
+  if (path.startsWith("/p/")) return path.slice("/p/".length);
+  return "";
+}
+
+async function fetchHandoff(token) {
+  if (!token) return null;
+  try {
+    const res = await fetch("/p/" + token + "/handoff");
+    if (!res.ok) return null;
+    const rec = await res.json();
+    if (!rec || !rec.host_id || !rec.device_id || !rec.secret) return null;
+    return rec;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function postHandoff(rec) {
+  const token = pairTokenFromPath();
+  if (!token || !rec || !rec.host_id || !rec.device_id || !rec.secret) return;
+  try {
+    await fetch("/p/" + token + "/handoff", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        host_id: rec.host_id,
+        host_name: rec.host_name,
+        device_id: rec.device_id,
+        secret: rec.secret,
+      }),
+    });
+  } catch (e) {
+    /* laptop wait still polls subscribe */
+  }
+}
+
 async function enableNotifications(hostId, deviceId, msgEl) {
   const say = (kind, text) => {
     if (msgEl) banner(msgEl, kind, text);
@@ -297,6 +335,14 @@ async function enableNotifications(hostId, deviceId, msgEl) {
     say("err", "This browser cannot receive push notifications.");
     return;
   }
+  if (!hostId || !deviceId) {
+    const rec = await fetchHandoff(pairTokenFromPath());
+    if (rec) {
+      hostId = rec.host_id;
+      deviceId = rec.device_id;
+      await saveRecord(rec.host_id, rec);
+    }
+  }
   const perm = await Notification.requestPermission();
   if (perm !== "granted") {
     say(
@@ -305,10 +351,6 @@ async function enableNotifications(hostId, deviceId, msgEl) {
         ? "Notifications were not allowed. On iPhone: Settings → Parent Approval → Notifications."
         : "Notifications were not allowed."
     );
-    return;
-  }
-  if (!hostId || !deviceId) {
-    say("ok", "Notifications allowed. Scan a pairing QR from this Home Screen app so it can buzz.");
     return;
   }
   const vapidRes = await fetch("/vapid-public");
@@ -325,13 +367,14 @@ async function enableNotifications(hostId, deviceId, msgEl) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      device_id: deviceId,
-      host_id: hostId,
+      device_id: deviceId || newDeviceId(),
+      host_id: hostId || "",
       subscription: sub.toJSON(),
     }),
   });
   if (!posted.ok) throw new Error(await posted.text());
   say("ok", "Notifications on. Next time the kid needs sudo, this phone will buzz.");
+  settleHomeURL();
 }
 
 function showNotifySetup(recs) {
@@ -491,6 +534,11 @@ async function boot() {
   }
   if (path.startsWith("/p/")) {
     const token = path.slice("/p/".length);
+    const handed = await fetchHandoff(token);
+    if (handed) {
+      await saveRecord(handed.host_id, handed);
+      return finishPair("", handed);
+    }
     try {
       const meta = await fetch("/p/" + token + "/meta");
       if (!meta.ok) {
@@ -576,8 +624,8 @@ async function waitForPair(sid, deviceId) {
 }
 
 async function finishPair(sid, rec) {
-  settleHomeURL();
-  $("paired-host").textContent = rec.host_name;
+  await postHandoff(rec);
+  $("paired-host").textContent = rec.host_name || "this laptop";
   if (isStandalone()) {
     showNotifySetup([rec]);
   } else if (pushNeedsStandalone()) {

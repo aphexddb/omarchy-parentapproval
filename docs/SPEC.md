@@ -44,7 +44,9 @@ existing pair/ask routes on the same origin.
 
 `POST /pair/{sid}` with `{v, device_id, name, alg:"Ed25519", pubkey}`. Both screens show the same 6-digit SAS. The phone confirms (`POST /pair/{sid}/confirm`); the laptop overlay Y is a fallback. The pubkey is stored only after that confirm. `GET /pair/{sid}/wait` long-polls until then.
 
-After confirm, `parentapproval pair` waits until the phone has posted `POST /push/subscribe` (notifications allowed in the Home Screen app), then exits. The laptop asks the relay `{op:push-ready}` and the relay also pushes `{op:subscribed}` when the phone subscribes.
+After confirm, `parentapproval pair` waits until the phone has posted `POST /push/subscribe` (notifications allowed in the Home Screen app), then exits. The laptop sends `{op:expect-push}` and polls `{op:push-ready}`. The relay pushes `{op:subscribed}` when the phone subscribes.
+
+Safari pairing cannot copy into the iOS Home Screen app (partitioned storage). After pair the phone POSTs `/p/{token}/handoff` with the pairing record. The Home Screen icon is installed from that pairing URL (`start_url` `/p/{token}?homescreen=1`) so it can GET the handoff, then subscribe.
 
 The relay looks up which laptop owns `sid`/`rid` (from WSS `open`) and proxies the HTTP request over that connection. If the laptop is disconnected: HTTP 502 with a JSON error.
 
@@ -63,7 +65,8 @@ Laptop dials outbound. Server `{op:challenge, nonce}` (nonce is 32 random bytes,
 - `{op:open, id, kind:pair|ask, sid|rid}` → `{op:opened, id, token}`
 - `{op:proxy, id, method, path, header, body}` → laptop runs existing HTTP handlers via `httptest.NewRecorder` and replies `{op:proxy-res, id, status, header, body}`
 - `{op:notify, host_id, device_id?, title, body, url}` → web-push
-- `{op:push-ready, id, device_id}` → `{op:push-ready, id, ready}` (this host has a push subscription for that phone)
+- `{op:expect-push, id, device_id}` laptop is waiting for this phone to enable notifications
+- `{op:push-ready, id, device_id}` → `{op:push-ready, id, ready}` (`device_id` empty = any sub for this host)
 - `{op:subscribed, host_id, device_id}` laptop receives when a phone `POST /push/subscribe`s
 
 `--dev` without `--relay` still serves local HTTP on `protocol.ListenPort` (17421) with no firewall.

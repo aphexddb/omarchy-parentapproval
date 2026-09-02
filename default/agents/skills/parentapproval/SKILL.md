@@ -83,9 +83,9 @@ pick it up — do not run `install-skills` as the kid. `enable` backfills every
 current `omarchy-kids` member. `sudo parentapproval install-skills`
 does the parent (`SUDO_USER`) and all kids.
 
-On the phone after pair: Add to Home Screen, open the icon, tap Allow
-notifications. `pair` waits until notifications are on, then exits. Next
-time the kid needs sudo, the phone buzzes.
+On the phone after pair: Add **this pairing page** to Home Screen, open the
+icon, tap Allow notifications. `pair` waits until notifications are on, then
+exits. Next time the kid needs sudo, the phone buzzes.
 
 `setup-kid` creates the login if needed. That password unlocks the session. It
 will not sudo.

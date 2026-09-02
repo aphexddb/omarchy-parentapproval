@@ -326,6 +326,23 @@ func (c *relayClient) Open(kind, sid, rid string, ttlS int) (string, error) {
 	}
 }
 
+func (c *relayClient) ExpectPush(deviceID string) error {
+	if !c.Ready() {
+		return errRelayDown
+	}
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return errRelayDown
+	}
+	return c.writeJSON(conn, relayMsg{
+		Op:       "expect-push",
+		ID:       randomHex(8),
+		DeviceID: deviceID,
+	})
+}
+
 func (c *relayClient) PushReady(deviceID string) (bool, error) {
 	if err := c.WaitReady(50 * time.Millisecond); err != nil {
 		return false, err

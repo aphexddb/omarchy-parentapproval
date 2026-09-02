@@ -451,3 +451,75 @@ func TestPushReadyQuery(t *testing.T) {
 		t.Fatalf("after %+v", after)
 	}
 }
+
+func TestHandoffAndPairManifest(t *testing.T) {
+	_, ts := newTestRelay(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, priv, pub)
+	if err := conn.WriteJSON(msg{Op: "open", ID: "1", Kind: "pair", SID: "sid-h"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var opened msg
+	if err := conn.ReadJSON(&opened); err != nil {
+		t.Fatal(err)
+	}
+	if opened.Op != "opened" || opened.Token == "" {
+		t.Fatalf("opened %+v", opened)
+	}
+	token := opened.Token
+	page, err := http.Get(ts.URL + "/p/" + token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page.Body.Close()
+	if page.StatusCode != 200 {
+		t.Fatalf("pair page %s", page.Status)
+	}
+	manRes, err := http.Get(ts.URL + "/p/" + token + "/manifest.webmanifest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manRes.Body.Close()
+	var man map[string]any
+	if err := json.NewDecoder(manRes.Body).Decode(&man); err != nil {
+		t.Fatal(err)
+	}
+	wantStart := "/p/" + token + "?homescreen=1"
+	if man["start_url"] != wantStart {
+		t.Fatalf("start_url %v want %s", man["start_url"], wantStart)
+	}
+
+	body, _ := json.Marshal(map[string]string{
+		"host_id":   protocol.B64(pub),
+		"host_name": "testhost",
+		"device_id": "phone-1",
+		"secret":    "sekrit",
+	})
+	post, err := http.Post(ts.URL+"/p/"+token+"/handoff", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("handoff post %s", post.Status)
+	}
+	got, err := http.Get(ts.URL + "/p/" + token + "/handoff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Body.Close()
+	if got.StatusCode != 200 {
+		t.Fatalf("handoff get %s", got.Status)
+	}
+	var rec map[string]string
+	if err := json.NewDecoder(got.Body).Decode(&rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec["device_id"] != "phone-1" || rec["secret"] != "sekrit" {
+		t.Fatalf("handoff %+v", rec)
+	}
+}

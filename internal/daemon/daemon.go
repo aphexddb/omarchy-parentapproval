@@ -49,12 +49,13 @@ type Daemon struct {
 	cfg   Config
 	store *store.Store
 
-	mu           sync.Mutex
-	pairing      *pairSession
-	requests     map[string]*Request
-	byUser       map[string]string
-	grant        *oneShotGrant
-	pushReadyIDs map[string]bool
+	mu            sync.Mutex
+	pairing       *pairSession
+	requests      map[string]*Request
+	byUser        map[string]string
+	grant         *oneShotGrant
+	pushReadyIDs  map[string]bool
+	hostPushReady bool
 
 	// Last allow/deny so the overlay can flash a check or X after pending clears.
 	lastAskResult string
@@ -655,15 +656,15 @@ func (d *Daemon) PairAbort(sid string) {
 }
 
 func (d *Daemon) markPushReady(deviceID string) {
-	if deviceID == "" {
-		return
-	}
-	if d.store.SetPushReady(deviceID) {
-		return
-	}
 	d.mu.Lock()
-	d.pushReadyIDs[deviceID] = true
+	d.hostPushReady = true
+	if deviceID != "" {
+		d.pushReadyIDs[deviceID] = true
+	}
 	d.mu.Unlock()
+	if deviceID != "" {
+		_ = d.store.SetPushReady(deviceID)
+	}
 }
 
 func (d *Daemon) consumePendingPushReady(deviceID string) {
@@ -671,7 +672,7 @@ func (d *Daemon) consumePendingPushReady(deviceID string) {
 		return
 	}
 	d.mu.Lock()
-	pending := d.pushReadyIDs[deviceID]
+	pending := d.hostPushReady || d.pushReadyIDs[deviceID]
 	d.mu.Unlock()
 	if pending {
 		_ = d.store.SetPushReady(deviceID)
@@ -679,19 +680,20 @@ func (d *Daemon) consumePendingPushReady(deviceID string) {
 }
 
 func (d *Daemon) isPushReady(deviceID string) bool {
-	if deviceID != "" && d.store.PushReady(deviceID) {
+	d.mu.Lock()
+	ready := d.hostPushReady || d.pushReadyIDs[deviceID]
+	d.mu.Unlock()
+	if ready {
 		return true
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.pushReadyIDs[deviceID]
+	return deviceID != "" && d.store.PushReady(deviceID)
 }
 
 func (d *Daemon) isPushReadyLocked(deviceID string) bool {
-	if deviceID != "" && d.store.PushReady(deviceID) {
+	if d.hostPushReady || d.pushReadyIDs[deviceID] {
 		return true
 	}
-	return d.pushReadyIDs[deviceID]
+	return deviceID != "" && d.store.PushReady(deviceID)
 }
 
 // WaitPush long-polls until this phone has posted /push/subscribe on the relay.
@@ -700,10 +702,11 @@ func (d *Daemon) WaitPush(deviceID string) (map[string]any, error) {
 	if d.relay == nil {
 		return map[string]any{"ready": false, "skip": true, "device_id": deviceID}, nil
 	}
+	_ = d.relay.ExpectPush(deviceID)
 	if d.isPushReady(deviceID) {
 		return map[string]any{"ready": true, "device_id": deviceID}, nil
 	}
-	if ready, err := d.relay.PushReady(deviceID); err == nil && ready {
+	if ready, err := d.relay.PushReady(""); err == nil && ready {
 		d.markPushReady(deviceID)
 		return map[string]any{"ready": true, "device_id": deviceID}, nil
 	}
@@ -713,6 +716,10 @@ func (d *Daemon) WaitPush(deviceID string) (map[string]any, error) {
 			return map[string]any{"ready": true, "device_id": deviceID}, nil
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+	if ready, err := d.relay.PushReady(""); err == nil && ready {
+		d.markPushReady(deviceID)
+		return map[string]any{"ready": true, "device_id": deviceID}, nil
 	}
 	return map[string]any{"ready": false, "device_id": deviceID}, nil
 }

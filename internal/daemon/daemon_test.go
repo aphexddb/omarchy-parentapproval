@@ -911,3 +911,75 @@ func TestWaitPushAfterSubscribe(t *testing.T) {
 		t.Fatalf("parent missing from status %+v", st)
 	}
 }
+
+func TestWaitPushAnySubForHost(t *testing.T) {
+	rs, err := relay.New(relay.Config{
+		PublicURL: "http://placeholder",
+		DataDir:   t.TempDir(),
+		Web:       web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(rs)
+	t.Cleanup(ts.Close)
+	rs.SetPublicURL(ts.URL)
+
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "pam.sock")
+	d, err := Open(Config{
+		StateDir:   dir,
+		SocketPath: sock,
+		RelayURL:   ts.URL,
+		Web:        web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); d.Close() })
+	go func() { _ = d.Serve(ctx) }()
+	waitSock(t, sock)
+	if err := d.relay.WaitReady(3 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	type waitRes struct {
+		got map[string]any
+		err error
+	}
+	waited := make(chan waitRes, 1)
+	go func() {
+		got, err := WaitPush(sock, "paired-device")
+		waited <- waitRes{got, err}
+	}()
+
+	subBody, _ := json.Marshal(map[string]any{
+		"device_id": "home-screen-device",
+		"host_id":   d.HostID(),
+		"subscription": map[string]any{
+			"endpoint": "https://push.example/home-screen",
+			"keys":     map[string]string{"p256dh": "dGVzdA", "auth": "dGVzdA"},
+		},
+	})
+	sub, err := http.Post(ts.URL+"/push/subscribe", "application/json", bytes.NewReader(subBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.Body.Close()
+	if sub.StatusCode != 200 {
+		t.Fatalf("subscribe %s", sub.Status)
+	}
+
+	select {
+	case res := <-waited:
+		if res.err != nil {
+			t.Fatalf("wait-push: %v", res.err)
+		}
+		if ready, _ := res.got["ready"].(bool); !ready {
+			t.Fatalf("wait-push %+v", res.got)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("wait-push timed out")
+	}
+}

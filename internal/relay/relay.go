@@ -42,12 +42,22 @@ type vapidKeys struct {
 }
 
 type tokenRec struct {
-	Token  string `json:"token"`
-	HostID string `json:"host_id"`
-	Kind   string `json:"kind"`
-	SID    string `json:"sid,omitempty"`
-	RID    string `json:"rid,omitempty"`
-	Exp    int64  `json:"exp"`
+	Token   string       `json:"token"`
+	HostID  string       `json:"host_id"`
+	Kind    string       `json:"kind"`
+	SID     string       `json:"sid,omitempty"`
+	RID     string       `json:"rid,omitempty"`
+	Exp     int64        `json:"exp"`
+	Handoff *pairHandoff `json:"handoff,omitempty"`
+}
+
+// pairHandoff copies the Safari pairing record to the Home Screen app.
+// iOS partitions storage, so Allow in the icon cannot see the Safari pair.
+type pairHandoff struct {
+	HostID   string `json:"host_id"`
+	HostName string `json:"host_name,omitempty"`
+	DeviceID string `json:"device_id"`
+	Secret   string `json:"secret"`
 }
 
 type pushSub struct {
@@ -99,13 +109,14 @@ type Server struct {
 	cfg   Config
 	vapid vapidKeys
 
-	mu     sync.Mutex
-	hosts  map[string]*hostConn
-	tokens map[string]*tokenRec
-	sids   map[string]string             // sid -> host_id
-	rids   map[string]string             // rid -> host_id
-	pairOf map[string]string             // host_id -> live pair sid
-	subs   map[string]map[string]pushSub // host_id -> device_id -> sub
+	mu         sync.Mutex
+	hosts      map[string]*hostConn
+	tokens     map[string]*tokenRec
+	sids       map[string]string             // sid -> host_id
+	rids       map[string]string             // rid -> host_id
+	pairOf     map[string]string             // host_id -> live pair sid
+	subs       map[string]map[string]pushSub // host_id -> device_id -> sub
+	expectPush map[string]string             // host_id -> device_id (empty = any)
 }
 
 var upgrader = websocket.Upgrader{
@@ -121,13 +132,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		cfg:    cfg,
-		hosts:  map[string]*hostConn{},
-		tokens: map[string]*tokenRec{},
-		sids:   map[string]string{},
-		rids:   map[string]string{},
-		pairOf: map[string]string{},
-		subs:   map[string]map[string]pushSub{},
+		cfg:        cfg,
+		hosts:      map[string]*hostConn{},
+		tokens:     map[string]*tokenRec{},
+		sids:       map[string]string{},
+		rids:       map[string]string{},
+		pairOf:     map[string]string{},
+		subs:       map[string]map[string]pushSub{},
+		expectPush: map[string]string{},
 	}
 	if err := s.loadVAPID(); err != nil {
 		return nil, err
@@ -182,8 +194,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimSuffix(strings.TrimPrefix(path, "/p/"), "/meta")
 		token = strings.TrimSuffix(token, "/")
 		s.handleTokenMeta(w, token)
+	case strings.HasPrefix(path, "/p/") && strings.HasSuffix(path, "/handoff") && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		token := strings.TrimSuffix(strings.TrimPrefix(path, "/p/"), "/handoff")
+		token = strings.TrimSuffix(token, "/")
+		s.handleHandoff(w, r, token)
+	case strings.HasPrefix(path, "/p/") && strings.HasSuffix(path, "/manifest.webmanifest") && r.Method == http.MethodGet:
+		token := strings.TrimSuffix(strings.TrimPrefix(path, "/p/"), "/manifest.webmanifest")
+		token = strings.TrimSuffix(token, "/")
+		s.writePairManifest(w, token)
 	case strings.HasPrefix(path, "/p/") && r.Method == http.MethodGet:
-		s.writeWeb(w, "index.html")
+		token := strings.TrimPrefix(path, "/p/")
+		token = strings.TrimSuffix(token, "/")
+		s.writePairPage(w, token)
 	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/wait") && r.Method == http.MethodGet:
 		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/wait")
 		s.proxyBySID(w, r, sid)
@@ -417,6 +439,7 @@ func (s *Server) handleHostWS(w http.ResponseWriter, r *http.Request) {
 		if s.hosts[hostID] == h {
 			delete(s.hosts, hostID)
 		}
+		delete(s.expectPush, hostID)
 		s.mu.Unlock()
 		h.failPending(errors.New("disconnected"))
 		log.Printf("relay host disconnected %s", hostID)
@@ -468,6 +491,11 @@ func (s *Server) handleHostWS(w http.ResponseWriter, r *http.Request) {
 			_ = h.send(msg{Op: "ok", ID: m.ID})
 		case "push-ready":
 			s.handlePushReady(h, m)
+		case "expect-push":
+			s.mu.Lock()
+			s.expectPush[h.id] = m.DeviceID
+			s.mu.Unlock()
+			_ = h.send(msg{Op: "ok", ID: m.ID})
 		default:
 			log.Printf("relay unknown op %q from %s", m.Op, hostID)
 		}
@@ -592,8 +620,15 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
-	if body.DeviceID == "" || body.HostID == "" || body.Subscription == nil || body.Subscription.Endpoint == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id, host_id, subscription required"})
+	if body.DeviceID == "" || body.Subscription == nil || body.Subscription.Endpoint == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id, subscription required"})
+		return
+	}
+	if body.HostID == "" {
+		body.HostID = s.uniqueExpectHost()
+	}
+	if body.HostID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
 		return
 	}
 	sub := pushSub{DeviceID: body.DeviceID, HostID: body.HostID, Subscription: *body.Subscription}
@@ -604,13 +639,51 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	s.subs[body.HostID][body.DeviceID] = sub
 	s.mu.Unlock()
 	s.saveSub(sub)
-	s.mu.Lock()
-	h := s.hosts[body.HostID]
-	s.mu.Unlock()
+	log.Printf("relay subscribe %s/%s", body.HostID, body.DeviceID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	if h != nil {
+	s.fanoutSubscribed(body.HostID, body.DeviceID, sub)
+}
+
+func (s *Server) uniqueExpectHost() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.expectPush) != 1 {
+		return ""
+	}
+	for id := range s.expectPush {
+		return id
+	}
+	return ""
+}
+
+func (s *Server) fanoutSubscribed(hostID, deviceID string, sub pushSub) {
+	s.mu.Lock()
+	targets := map[string]*hostConn{}
+	if h := s.hosts[hostID]; h != nil {
+		targets[hostID] = h
+	}
+	for hid, wantDev := range s.expectPush {
+		if hid != hostID && wantDev != "" && wantDev != deviceID {
+			continue
+		}
+		if h := s.hosts[hid]; h != nil {
+			targets[hid] = h
+		}
+		if hid != hostID {
+			if s.subs[hid] == nil {
+				s.subs[hid] = map[string]pushSub{}
+			}
+			copied := sub
+			copied.HostID = hid
+			s.subs[hid][deviceID] = copied
+			go s.saveSub(copied)
+		}
+	}
+	s.mu.Unlock()
+	for hid, h := range targets {
+		hid, h := hid, h
 		go func() {
-			_ = h.send(msg{Op: "subscribed", HostID: body.HostID, DeviceID: body.DeviceID})
+			_ = h.send(msg{Op: "subscribed", HostID: hid, DeviceID: deviceID})
 		}()
 	}
 }
@@ -626,6 +699,41 @@ func (s *Server) handlePushReady(h *hostConn, m msg) {
 	}
 	s.mu.Unlock()
 	_ = h.send(msg{Op: "push-ready", ID: m.ID, Ready: ready, DeviceID: m.DeviceID})
+}
+
+func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request, token string) {
+	s.mu.Lock()
+	rec := s.tokens[token]
+	s.mu.Unlock()
+	if rec == nil || time.Now().Unix() > rec.Exp {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "gone"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		if rec.Handoff == nil || rec.Handoff.Secret == "" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "gone"})
+			return
+		}
+		writeJSON(w, http.StatusOK, rec.Handoff)
+		return
+	}
+	var body pairHandoff
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+		return
+	}
+	if body.HostID == "" || body.DeviceID == "" || body.Secret == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id, device_id, secret required"})
+		return
+	}
+	s.mu.Lock()
+	if live := s.tokens[token]; live != nil {
+		live.Handoff = &body
+		rec = live
+	}
+	s.mu.Unlock()
+	s.saveToken(rec)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *hostConn) send(v any) error {
@@ -805,6 +913,41 @@ func (s *Server) loadSubs() {
 			s.subs[hostID][sub.DeviceID] = sub
 		}
 	}
+}
+
+func (s *Server) writePairPage(w http.ResponseWriter, token string) {
+	if s.cfg.Web == nil {
+		http.Error(w, "no web assets", 500)
+		return
+	}
+	raw, err := fs.ReadFile(s.cfg.Web, "index.html")
+	if err != nil {
+		http.NotFound(w, nil)
+		return
+	}
+	page := strings.Replace(string(raw), `href="/manifest.webmanifest"`, `href="/p/`+token+`/manifest.webmanifest"`, 1)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	_, _ = w.Write([]byte(page))
+}
+
+func (s *Server) writePairManifest(w http.ResponseWriter, token string) {
+	if s.cfg.Web == nil {
+		http.Error(w, "no web assets", 500)
+		return
+	}
+	raw, err := fs.ReadFile(s.cfg.Web, "manifest.webmanifest")
+	if err != nil {
+		http.NotFound(w, nil)
+		return
+	}
+	var man map[string]any
+	if err := json.Unmarshal(raw, &man); err != nil {
+		http.Error(w, "manifest", 500)
+		return
+	}
+	man["start_url"] = "/p/" + token + "?homescreen=1"
+	writeJSON(w, http.StatusOK, man)
 }
 
 func (s *Server) writeWeb(w http.ResponseWriter, name string) {
