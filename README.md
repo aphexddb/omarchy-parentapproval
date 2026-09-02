@@ -44,7 +44,7 @@ That clones the repo, builds the package, and installs it with pacman. From a ch
 ./scripts/dev-install
 ```
 
-`./install-omarchy` is the same script. To remove (package, overlay, skill links, daemon state):
+To remove (package, overlay, skill links, daemon state):
 
 ```bash
 ./scripts/dev-uninstall
