@@ -73,7 +73,7 @@ sudo parentapproval pair          # scan; keys land in /var/lib via the systemd 
 sudo parentapproval setup-kid milo
 ```
 
-`ask` and `pending` talk to the systemd daemon as a regular user. Pair, status, revoke, doctor, enable, disable, setup-kid, and install-skills need sudo. Use `--dev` only for an unprivileged local dry-run of the daemon.
+`ask`, `pending`, and `status` talk to the systemd daemon as a regular user. Pair, revoke, doctor, enable, disable, setup-kid, and install-skills need sudo. Use `--dev` only for an unprivileged local dry-run of the daemon.
 
 Optional desktop overlay, so polkit and GUI prompts get the same QR card:
 
@@ -130,7 +130,7 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 | `sudo parentapproval pair` | Pair a parent phone |
 | `sudo parentapproval setup-kid NAME` | Create/lock a kid user |
 | `sudo parentapproval enable` / `disable` | PAM, sudoers, systemd |
-| `sudo parentapproval status` | Host id, relay, paired phones |
+| `parentapproval status` | Host id, relay, paired phones |
 | `sudo parentapproval revoke DEVICE_ID` | Drop a phone |
 | `sudo parentapproval doctor` | Check PAM order, daemon, relay |
 | `sudo parentapproval install-skills` | Symlink the agent skill (parent + all kids) |

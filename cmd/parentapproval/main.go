@@ -101,7 +101,7 @@ func usage(w io.Writer) {
 Commands:
   ask --cmd CMD                 ask a parent, then the daemon runs CMD as root
   pair                          pair a parent phone (root)
-  status                        show daemon and paired phones (root)
+  status                        show daemon and paired phones
   pending [--json]              list pending requests
   revoke DEVICE_ID              unpair a phone (root)
   doctor                        check PAM and daemon (root)
@@ -137,7 +137,7 @@ func requireRoot(cmd string) error {
 
 func commandNeedsRoot(cmd string) bool {
 	switch cmd {
-	case "pair", "status", "revoke", "doctor",
+	case "pair", "revoke", "doctor",
 		"enable", "disable", "setup-kid", "install-skills",
 		"teardown-firewall":
 		return true

@@ -56,15 +56,15 @@ Binary is `/usr/bin/parentapproval` after `makepkg -f -si` or `sudo make install
 | Pair parent phone | `sudo parentapproval pair` |
 | Enable PAM + daemon | `sudo parentapproval enable` |
 | Create / lock a kid user | `sudo parentapproval setup-kid milo` |
-| Status / paired phones | `sudo parentapproval status` |
+| Status / paired phones | `parentapproval status` |
 | List pending request | `parentapproval pending` |
 | Drop a phone | `sudo parentapproval revoke DEVICE_ID` |
 | Check PAM order + daemon | `sudo parentapproval doctor` |
 | Teach coding agents | `sudo parentapproval install-skills` |
 | Unprivileged dry-run daemon | `parentapproval daemon --dev` |
 
-`ask` and `pending` talk to the systemd socket as a regular user.
-Pair, status, revoke, doctor, enable, disable, setup-kid, and
+`ask`, `pending`, and `status` talk to the systemd socket as a regular user.
+Pair, revoke, doctor, enable, disable, setup-kid, and
 install-skills need sudo.
 `--dev` / `OMARCHY_PARENTAPPROVAL_DEV=1` is only for an unprivileged local
 daemon (`~/.local/state` + a per-user socket).
@@ -104,7 +104,7 @@ is set.
 
 1. Caller is not in `omarchy-kids` (wheel parent, or you). Use `ask --cmd`, or
    `setup-kid`, or `sudo -u milo sudo pacman -S cowsay` from a kid session.
-2. No paired phone: `sudo parentapproval status` then `sudo parentapproval pair`.
+2. No paired phone: `parentapproval status` then `sudo parentapproval pair`.
 3. Daemon down: `sudo parentapproval doctor` and `sudo systemctl start parentapprovald`.
 4. Relay disconnected: `status` should show the relay URL as connected. Check WAN.
 5. Keys paired in `--dev` but kid sudo uses the systemd daemon — re-pair with
