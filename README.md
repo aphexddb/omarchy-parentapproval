@@ -133,18 +133,17 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 
 ## Releases
 
-Linux **amd64** and **arm64** binaries (`parentapproval` and `parentapproval-relay`) are published with [GoReleaser](https://goreleaser.com) when a `v*` tag is pushed. No macOS or Windows builds.
+[SemVer 2.0](https://semver.org/) tags (`vMAJOR.MINOR.PATCH`). Linux **amd64** and **arm64** only.
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+./scripts/stamp-version v1.2.3
+git add VERSION PKGBUILD
+git commit -m "Release v1.2.3"
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin HEAD v1.2.3
 ```
 
-Local dry-run (no GitHub upload):
-
-```bash
-make release-snapshot
-```
+GoReleaser runs `scripts/stamp-version` from the tag and publishes the binaries. Dry-run: `make release-snapshot`.
 
 ## What this is not
 

@@ -31,6 +31,7 @@ _src_files=(
 prepare() {
   local f v
   v=$(tr -d '[:space:]' < "$startdir/VERSION")
+  v=${v//[-+]/_}
   if [[ $v != "$pkgver" ]]; then
     echo "PKGBUILD pkgver=$pkgver but VERSION is $v" >&2
     return 1

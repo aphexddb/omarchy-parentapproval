@@ -13,11 +13,14 @@ parentapproval ask --cmd "pacman -S cowsay"
 
 ## Release
 
-Bump the same version in `VERSION` and `PKGBUILD` (`pkgver`; reset `pkgrel` to 1). The CLI reads `VERSION` on `go build`; `make` and GoReleaser stamp it via `-X main.version`. Commit, then tag and push — Linux amd64 and arm64 binaries only.
+[SemVer 2.0](https://semver.org/). Tags are `vMAJOR.MINOR.PATCH` (prerelease: `v1.2.3-rc.1`). `VERSION` is the same number without the `v`. The CLI embeds `VERSION`; `make` and GoReleaser also stamp `-X main.version` from `VERSION` / the tag.
 
 ```bash
-git tag -a vX.Y.Z -m "vX.Y.Z"
-git push origin vX.Y.Z
+./scripts/stamp-version v1.2.3
+git add VERSION PKGBUILD
+git commit -m "Release v1.2.3"
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin HEAD v1.2.3
 ```
 
-Dry-run (no GitHub upload): `make release-snapshot`.
+`stamp-version` writes `VERSION`, sets `PKGBUILD` `pkgver` (Arch-safe: `-`/`+` → `_`), and resets `pkgrel` to 1. GoReleaser runs the same script from the tag, then publishes Linux amd64 and arm64 only. Same-version rebuild: bump `pkgrel` by hand. Dry-run: `make release-snapshot`.

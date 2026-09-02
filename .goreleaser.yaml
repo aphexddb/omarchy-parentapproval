@@ -3,6 +3,11 @@ version: 2
 
 project_name: parentapproval
 
+before:
+  hooks:
+    # Second arg is .IsSnapshot; snapshots must not rewrite VERSION/PKGBUILD.
+    - ./scripts/stamp-version {{ .Version }} {{ .IsSnapshot }}
+
 builds:
   - id: parentapproval
     main: ./cmd/parentapproval
@@ -61,6 +66,7 @@ checksum:
   name_template: checksums.txt
 
 changelog:
+  use: github
   sort: asc
   filters:
     exclude:
