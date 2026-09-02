@@ -34,7 +34,9 @@ relay:
 	rm -f bin/omarchy-parentapproval-relay
 
 test:
-	go test ./cmd/... ./internal/... ./web ./smoketest/fakephone
+	go test ./cmd/... ./internal/... ./web
+	@# fakephone is checkout-only (PKGBUILD does not snapshot smoketest/).
+	@if [ -d ./smoketest/fakephone ]; then go test ./smoketest/fakephone; fi
 
 # Docker relay e2e. Skips if docker is missing unless PARENTAPPROVAL_SMOKE=1.
 .PHONY: smoke
