@@ -50,6 +50,15 @@ The default relay on [parentapprovals.com](https://parentapprovals.com) is serve
 
 JS code on the relay (`index.html`, `app.js`, `nacl.min.js`, `sha256.min.js`) are the bits that can use the parent's private key. A hostile or compromised relay can serve JavaScript that reads that key, or that silently signs an allow. 
 
+Self-hosters can set:
+
+- Laptop: `OMARCHY_PARENTAPPROVAL_RELAY` or `parentapproval daemon --relay URL`
+- Relay process: `RELAY_PUBLIC_URL` (or `PUBLIC_URL`) and `RELAY_DATA` (default `/data`)
+
+`--relay=off` is local-only HTTP (`--dev`). Production does not open a LAN listen port.
+
+See [deploy readme](deploy/relay/README.md) for Railway and optional Caddy compose. Do not terminate TLS in the relay container.
+
 ### What the relay can and cannot do
 
 | Actor | Can forge an `allow`? | Can see command text? | Can replace phone code? |
