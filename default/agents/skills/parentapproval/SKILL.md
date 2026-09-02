@@ -73,7 +73,7 @@ daemon (`~/.local/state` + a per-user socket).
 
 ```bash
 sudo parentapproval enable
-sudo parentapproval pair          # scan, confirm the 6-digit code matches
+sudo parentapproval pair          # scan, confirm the 6-digit code on the phone, allow notifications
 sudo parentapproval setup-kid milo
 sudo parentapproval install-skills
 ```
@@ -84,7 +84,8 @@ current `omarchy-kids` member. `sudo parentapproval install-skills`
 does the parent (`SUDO_USER`) and all kids.
 
 On the phone after pair: Add to Home Screen, open the icon, tap Allow
-notifications. Next time the kid needs sudo, the phone buzzes.
+notifications. `pair` waits until notifications are on, then exits. Next
+time the kid needs sudo, the phone buzzes.
 
 `setup-kid` creates the login if needed. That password unlocks the session. It
 will not sudo.

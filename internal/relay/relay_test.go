@@ -360,3 +360,94 @@ func TestManifestAndSW(t *testing.T) {
 		t.Fatalf("sw %s", sw.Status)
 	}
 }
+
+func postPushSub(t *testing.T, ts *httptest.Server, hostID, deviceID string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"device_id": deviceID,
+		"host_id":   hostID,
+		"subscription": map[string]any{
+			"endpoint": "https://push.example/" + deviceID,
+			"keys":     map[string]string{"p256dh": "dGVzdA", "auth": "dGVzdA"},
+		},
+	})
+	res, err := http.Post(ts.URL+"/push/subscribe", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("subscribe %s %s", res.Status, b)
+	}
+}
+
+func TestSubscribeNotifiesHost(t *testing.T) {
+	_, ts := newTestRelay(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, priv, pub)
+	hostID := protocol.B64(pub)
+	postPushSub(t, ts, hostID, "phone-1")
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got msg
+	if err := conn.ReadJSON(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Op != "subscribed" || got.DeviceID != "phone-1" || got.HostID != hostID {
+		t.Fatalf("subscribed %+v", got)
+	}
+}
+
+func TestPushReadyQuery(t *testing.T) {
+	_, ts := newTestRelay(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, priv, pub)
+	if err := conn.WriteJSON(msg{Op: "push-ready", ID: "q1", DeviceID: "phone-1"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var before msg
+	if err := conn.ReadJSON(&before); err != nil {
+		t.Fatal(err)
+	}
+	if before.Op != "push-ready" || before.ID != "q1" || before.Ready {
+		t.Fatalf("before %+v", before)
+	}
+
+	postPushSub(t, ts, protocol.B64(pub), "phone-1")
+	// subscribed event may arrive before the query reply; drain until push-ready.
+	deadline := time.Now().Add(2 * time.Second)
+	sawSub := false
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var m msg
+		if err := conn.ReadJSON(&m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Op == "subscribed" && m.DeviceID == "phone-1" {
+			sawSub = true
+			break
+		}
+	}
+	if !sawSub {
+		t.Fatal("expected subscribed event")
+	}
+	if err := conn.WriteJSON(msg{Op: "push-ready", ID: "q2", DeviceID: "phone-1"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var after msg
+	if err := conn.ReadJSON(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Op != "push-ready" || after.ID != "q2" || !after.Ready {
+		t.Fatalf("after %+v", after)
+	}
+}

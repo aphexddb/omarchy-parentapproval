@@ -77,6 +77,7 @@ type msg struct {
 	Title    string              `json:"title,omitempty"`
 	URL      string              `json:"url,omitempty"`
 	Error    string              `json:"error,omitempty"`
+	Ready    bool                `json:"ready,omitempty"`
 }
 
 type rpcRes struct {
@@ -465,6 +466,8 @@ func (s *Server) handleHostWS(w http.ResponseWriter, r *http.Request) {
 		case "notify":
 			go s.handleNotify(m)
 			_ = h.send(msg{Op: "ok", ID: m.ID})
+		case "push-ready":
+			s.handlePushReady(h, m)
 		default:
 			log.Printf("relay unknown op %q from %s", m.Op, hostID)
 		}
@@ -601,7 +604,28 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	s.subs[body.HostID][body.DeviceID] = sub
 	s.mu.Unlock()
 	s.saveSub(sub)
+	s.mu.Lock()
+	h := s.hosts[body.HostID]
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	if h != nil {
+		go func() {
+			_ = h.send(msg{Op: "subscribed", HostID: body.HostID, DeviceID: body.DeviceID})
+		}()
+	}
+}
+
+func (s *Server) handlePushReady(h *hostConn, m msg) {
+	s.mu.Lock()
+	byDev := s.subs[h.id]
+	ready := false
+	if m.DeviceID != "" {
+		_, ready = byDev[m.DeviceID]
+	} else {
+		ready = len(byDev) > 0
+	}
+	s.mu.Unlock()
+	_ = h.send(msg{Op: "push-ready", ID: m.ID, Ready: ready, DeviceID: m.DeviceID})
 }
 
 func (h *hostConn) send(v any) error {

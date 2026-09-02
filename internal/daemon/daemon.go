@@ -49,11 +49,12 @@ type Daemon struct {
 	cfg   Config
 	store *store.Store
 
-	mu       sync.Mutex
-	pairing  *pairSession
-	requests map[string]*Request
-	byUser   map[string]string
-	grant    *oneShotGrant
+	mu           sync.Mutex
+	pairing      *pairSession
+	requests     map[string]*Request
+	byUser       map[string]string
+	grant        *oneShotGrant
+	pushReadyIDs map[string]bool
 
 	// Last allow/deny so the overlay can flash a check or X after pending clears.
 	lastAskResult string
@@ -105,14 +106,15 @@ type Request struct {
 }
 
 type sockReq struct {
-	Op      string `json:"op"`
-	SID     string `json:"sid,omitempty"`
-	RID     string `json:"rid,omitempty"`
-	User    string `json:"user,omitempty"`
-	Service string `json:"service,omitempty"`
-	CWD     string `json:"cwd,omitempty"`
-	Cmd     string `json:"cmd,omitempty"`
-	TTLS    int    `json:"ttl_s,omitempty"`
+	Op       string `json:"op"`
+	SID      string `json:"sid,omitempty"`
+	RID      string `json:"rid,omitempty"`
+	DeviceID string `json:"device_id,omitempty"`
+	User     string `json:"user,omitempty"`
+	Service  string `json:"service,omitempty"`
+	CWD      string `json:"cwd,omitempty"`
+	Cmd      string `json:"cmd,omitempty"`
+	TTLS     int    `json:"ttl_s,omitempty"`
 }
 
 func Open(cfg Config) (*Daemon, error) {
@@ -131,10 +133,11 @@ func Open(cfg Config) (*Daemon, error) {
 		return nil, errors.New("socket path required")
 	}
 	d := &Daemon{
-		cfg:      cfg,
-		store:    st,
-		requests: map[string]*Request{},
-		byUser:   map[string]string{},
+		cfg:          cfg,
+		store:        st,
+		requests:     map[string]*Request{},
+		byUser:       map[string]string{},
+		pushReadyIDs: map[string]bool{},
 	}
 	if cfg.RelayURL != "" {
 		d.relay = newRelayClient(d, cfg.RelayURL)
@@ -411,6 +414,8 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		return d.Pending()
 	case "status":
 		return d.Status()
+	case "wait-push":
+		return d.WaitPush(req.DeviceID)
 	case "revoke":
 		if req.SID == "" {
 			return nil, errors.New("device_id required")
@@ -564,7 +569,7 @@ func (d *Daemon) PairStatus(sid string) (map[string]any, error) {
 		}
 		if p.Done != nil {
 			done := *p.Done
-			out := map[string]any{"state": "done", "pair": done}
+			out := map[string]any{"state": "done", "pair": done, "device_id": done.DeviceID, "push_ready": d.isPushReadyLocked(done.DeviceID)}
 			if p.Pending != nil {
 				out["name"] = p.Pending.Name
 			}
@@ -606,6 +611,7 @@ func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
 	if err := d.store.PutParent(parent); err != nil {
 		return nil, err
 	}
+	d.consumePendingPushReady(parent.DeviceID)
 	done := &protocol.PairDone{
 		OK:       true,
 		HostID:   d.HostID(),
@@ -646,6 +652,69 @@ func (d *Daemon) PairAbort(sid string) {
 		d.failPairLocked()
 		d.maybeCloseHTTPLocked()
 	}
+}
+
+func (d *Daemon) markPushReady(deviceID string) {
+	if deviceID == "" {
+		return
+	}
+	if d.store.SetPushReady(deviceID) {
+		return
+	}
+	d.mu.Lock()
+	d.pushReadyIDs[deviceID] = true
+	d.mu.Unlock()
+}
+
+func (d *Daemon) consumePendingPushReady(deviceID string) {
+	if deviceID == "" {
+		return
+	}
+	d.mu.Lock()
+	pending := d.pushReadyIDs[deviceID]
+	d.mu.Unlock()
+	if pending {
+		_ = d.store.SetPushReady(deviceID)
+	}
+}
+
+func (d *Daemon) isPushReady(deviceID string) bool {
+	if deviceID != "" && d.store.PushReady(deviceID) {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pushReadyIDs[deviceID]
+}
+
+func (d *Daemon) isPushReadyLocked(deviceID string) bool {
+	if deviceID != "" && d.store.PushReady(deviceID) {
+		return true
+	}
+	return d.pushReadyIDs[deviceID]
+}
+
+// WaitPush long-polls until this phone has posted /push/subscribe on the relay.
+// Without a relay, skip is true — local --dev has no web-push.
+func (d *Daemon) WaitPush(deviceID string) (map[string]any, error) {
+	if d.relay == nil {
+		return map[string]any{"ready": false, "skip": true, "device_id": deviceID}, nil
+	}
+	if d.isPushReady(deviceID) {
+		return map[string]any{"ready": true, "device_id": deviceID}, nil
+	}
+	if ready, err := d.relay.PushReady(deviceID); err == nil && ready {
+		d.markPushReady(deviceID)
+		return map[string]any{"ready": true, "device_id": deviceID}, nil
+	}
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.isPushReady(deviceID) {
+			return map[string]any{"ready": true, "device_id": deviceID}, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return map[string]any{"ready": false, "device_id": deviceID}, nil
 }
 
 func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]any, error) {
@@ -893,6 +962,7 @@ func (d *Daemon) Status() (map[string]any, error) {
 			"name":       p.Name,
 			"created_at": p.CreatedAt,
 			"last_used":  p.LastUsed,
+			"push_ready": p.PushReady || d.isPushReady(p.DeviceID),
 		})
 	}
 	d.mu.Lock()
@@ -1408,6 +1478,10 @@ func PairConfirm(socket, sid string) (map[string]any, error) {
 
 func PairAbort(socket, sid string) (map[string]any, error) {
 	return Call(socket, sockReq{Op: "pair-abort", SID: sid})
+}
+
+func WaitPush(socket, deviceID string) (map[string]any, error) {
+	return Call(socket, sockReq{Op: "wait-push", DeviceID: deviceID})
 }
 
 func Create(socket, user, service, cwd, cmd string, ttl int) (map[string]any, error) {

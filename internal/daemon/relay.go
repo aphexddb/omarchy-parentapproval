@@ -42,6 +42,7 @@ type relayMsg struct {
 	Title    string              `json:"title,omitempty"`
 	URL      string              `json:"url,omitempty"`
 	Error    string              `json:"error,omitempty"`
+	Ready    bool                `json:"ready,omitempty"`
 }
 
 type relayClient struct {
@@ -245,7 +246,9 @@ func (c *relayClient) loop(ctx context.Context) error {
 		switch m.Op {
 		case "proxy":
 			go c.handleProxy(conn, m)
-		case "opened", "ok", "error":
+		case "subscribed":
+			c.d.markPushReady(m.DeviceID)
+		case "opened", "ok", "error", "push-ready":
 			c.mu.Lock()
 			ch := c.pending[m.ID]
 			if ch != nil {
@@ -320,6 +323,45 @@ func (c *relayClient) Open(kind, sid, rid string, ttlS int) (string, error) {
 		return resp.Token, nil
 	case <-timer.C:
 		return "", errors.New("relay open timeout")
+	}
+}
+
+func (c *relayClient) PushReady(deviceID string) (bool, error) {
+	if err := c.WaitReady(50 * time.Millisecond); err != nil {
+		return false, err
+	}
+	id := randomHex(8)
+	ch := make(chan relayMsg, 1)
+	c.mu.Lock()
+	conn := c.conn
+	if !c.ready || conn == nil {
+		c.mu.Unlock()
+		return false, errRelayDown
+	}
+	c.pending[id] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+	}()
+	if err := c.writeJSON(conn, relayMsg{Op: "push-ready", ID: id, DeviceID: deviceID}); err != nil {
+		return false, err
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case resp := <-ch:
+		if resp.Op == "error" || resp.Error != "" {
+			errMsg := resp.Error
+			if errMsg == "" {
+				errMsg = "push-ready failed"
+			}
+			return false, errors.New(errMsg)
+		}
+		return resp.Ready, nil
+	case <-timer.C:
+		return false, errors.New("relay push-ready timeout")
 	}
 }
 

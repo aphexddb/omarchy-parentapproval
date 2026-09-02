@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -319,8 +319,13 @@ func cmdPair(args []string) error {
 	}
 	fmt.Println("Waiting for a phone…  Ctrl-C to abort.")
 
+	var paired atomic.Bool
 	onInterrupt(func() {
 		dismissDisplay()
+		if paired.Load() {
+			fmt.Fprintln(os.Stderr, "Pairing is done. Enable notifications in the Home Screen app so this phone can buzz.")
+			os.Exit(0)
+		}
 		_, _ = daemon.PairAbort(p.socket, sid)
 	})
 
@@ -333,27 +338,17 @@ func cmdPair(args []string) error {
 		switch st["state"] {
 		case "pending_confirm":
 			name, _ := st["name"].(string)
-			if overlayOK {
-				if !prompted {
-					fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
-					fmt.Printf("Does the overlay show the same code  %s  ? Press Y to confirm, N to abort.\n", spaced(sas))
-					prompted = true
+			if !prompted {
+				fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
+				if overlayOK {
+					fmt.Printf("Confirm the matching code  %s  on the phone, or press Y on the overlay.\n", spaced(sas))
+				} else {
+					fmt.Printf("Confirm the matching code  %s  on the phone.\n", spaced(sas))
 				}
-				time.Sleep(200 * time.Millisecond)
-				continue
+				prompted = true
 			}
-			fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
-			fmt.Printf("Does the phone show the same code  %s  ?\n", spaced(sas))
-			if !confirm("Confirm this phone as a parent") {
-				_, _ = daemon.PairAbort(p.socket, sid)
-				return fmt.Errorf("aborted")
-			}
-			if _, err := daemon.PairConfirm(p.socket, sid); err != nil {
-				return err
-			}
-			fmt.Printf("Paired %q.\n", name)
-			fmt.Println("On the phone: leave Safari, open the Home Screen icon, tap Allow notifications.")
-			return nil
+			time.Sleep(200 * time.Millisecond)
+			continue
 		case "done":
 			name, _ := st["name"].(string)
 			if name == "" {
@@ -361,13 +356,20 @@ func cmdPair(args []string) error {
 					name, _ = pair["name"].(string)
 				}
 			}
+			deviceID, _ := st["device_id"].(string)
+			if deviceID == "" {
+				if pair, ok := st["pair"].(map[string]any); ok {
+					deviceID, _ = pair["device_id"].(string)
+				}
+			}
 			if name == "" {
 				fmt.Println("Paired.")
 			} else {
 				fmt.Printf("Paired %q.\n", name)
 			}
-			fmt.Println("On the phone: leave Safari, open the Home Screen icon, tap Allow notifications.")
-			return nil
+			paired.Store(true)
+			dismissDisplay()
+			return waitForPush(p, deviceID, via)
 		case "timeout", "none":
 			if prompted {
 				return fmt.Errorf("pairing aborted")
@@ -375,6 +377,32 @@ func cmdPair(args []string) error {
 			return fmt.Errorf("pairing timed out")
 		}
 	}
+}
+
+const pushWaitTimeout = 5 * time.Minute
+
+func waitForPush(p paths, deviceID, via string) error {
+	fmt.Println("On the phone: leave Safari, open the Home Screen icon, tap Allow notifications.")
+	if via != "relay" {
+		return nil
+	}
+	fmt.Println("Waiting for notifications…  Ctrl-C to abort.")
+	deadline := time.Now().Add(pushWaitTimeout)
+	for time.Now().Before(deadline) {
+		st, err := daemon.WaitPush(p.socket, deviceID)
+		if err != nil {
+			return err
+		}
+		if skip, _ := st["skip"].(bool); skip {
+			return nil
+		}
+		if ready, _ := st["ready"].(bool); ready {
+			fmt.Println("Notifications on. This phone will buzz when a kid needs sudo.")
+			return nil
+		}
+	}
+	fmt.Println("Pairing is done. Enable notifications in the Home Screen app so this phone can buzz.")
+	return nil
 }
 
 func cmdPairConfirm(args []string) error {
@@ -577,7 +605,11 @@ func cmdStatus(args []string) error {
 	}
 	for _, raw := range parents {
 		m, _ := raw.(map[string]any)
-		fmt.Printf("parent  %s  %s\n", m["name"], m["device_id"])
+		notify := "notify off"
+		if ok, _ := m["push_ready"].(bool); ok {
+			notify = "notify on"
+		}
+		fmt.Printf("parent  %s  %s  %s\n", m["name"], m["device_id"], notify)
 	}
 	fmt.Printf("pending %v\n", st["pending"])
 	return nil
@@ -660,14 +692,6 @@ func currentUser() string {
 
 func spaced(s string) string {
 	return strings.Join(strings.Split(s, ""), " ")
-}
-
-func confirm(q string) bool {
-	fmt.Printf("%s [y/N] ", q)
-	in := bufio.NewReader(os.Stdin)
-	line, _ := in.ReadString('\n')
-	line = strings.TrimSpace(strings.ToLower(line))
-	return line == "y" || line == "yes"
 }
 
 func onInterrupt(fn func()) {

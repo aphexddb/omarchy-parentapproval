@@ -16,6 +16,7 @@ type Parent struct {
 	PubKey    string    `json:"pubkey"`
 	CreatedAt time.Time `json:"created_at"`
 	LastUsed  time.Time `json:"last_used"`
+	PushReady bool      `json:"push_ready,omitempty"`
 }
 
 type Store struct {
@@ -129,12 +130,40 @@ func (s *Store) TouchParent(id string) {
 		return
 	}
 	p.LastUsed = time.Now().UTC()
-	s.parents[id] = p
+	s.writeParentLocked(p)
+}
+
+// SetPushReady marks that this phone completed /push/subscribe. Returns false
+// if the parent is not stored yet.
+func (s *Store) SetPushReady(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.parents[id]
+	if !ok {
+		return false
+	}
+	if p.PushReady {
+		return true
+	}
+	p.PushReady = true
+	s.writeParentLocked(p)
+	return true
+}
+
+func (s *Store) PushReady(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.parents[id]
+	return ok && p.PushReady
+}
+
+func (s *Store) writeParentLocked(p Parent) {
+	s.parents[p.DeviceID] = p
 	raw, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(s.dir, "parents", id+".json"), raw, 0o600)
+	_ = os.WriteFile(filepath.Join(s.dir, "parents", p.DeviceID+".json"), raw, 0o600)
 }
 
 func (s *Store) Revoke(id string) error {

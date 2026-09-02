@@ -772,3 +772,142 @@ func TestRelayPairAndAsk(t *testing.T) {
 		t.Fatalf("wait %+v", waited)
 	}
 }
+
+func TestWaitPushNoRelaySkips(t *testing.T) {
+	_, sock := startTestDaemon(t)
+	st, err := WaitPush(sock, "phone-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skip, _ := st["skip"].(bool); !skip {
+		t.Fatalf("expected skip without relay, got %+v", st)
+	}
+}
+
+func TestWaitPushAfterSubscribe(t *testing.T) {
+	rs, err := relay.New(relay.Config{
+		PublicURL: "http://placeholder",
+		DataDir:   t.TempDir(),
+		Web:       web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(rs)
+	t.Cleanup(ts.Close)
+	rs.SetPublicURL(ts.URL)
+
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "pam.sock")
+	d, err := Open(Config{
+		StateDir:   dir,
+		SocketPath: sock,
+		RelayURL:   ts.URL,
+		Web:        web.FS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); d.Close() })
+	go func() { _ = d.Serve(ctx) }()
+	waitSock(t, sock)
+
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := protocol.PairOffer{V: 1, DeviceID: "phone-push", Name: "Mom Pixel", Alg: "Ed25519", PubKey: protocol.B64(pub)}
+	raw, _ := json.Marshal(offer)
+	post, err := http.Post(ts.URL+"/pair/"+sid, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != http.StatusAccepted {
+		t.Fatalf("offer %s", post.Status)
+	}
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-push"})
+	conf, err := http.Post(ts.URL+"/pair/"+sid+"/confirm", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf.Body.Close()
+	if conf.StatusCode != http.StatusOK {
+		t.Fatalf("confirm %s", conf.Status)
+	}
+
+	st, err := PairStatus(sock, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["state"] != "done" {
+		t.Fatalf("state %+v", st)
+	}
+	if ready, _ := st["push_ready"].(bool); ready {
+		t.Fatal("push should not be ready before subscribe")
+	}
+
+	type waitRes struct {
+		got map[string]any
+		err error
+	}
+	waited := make(chan waitRes, 1)
+	go func() {
+		got, err := WaitPush(sock, "phone-push")
+		waited <- waitRes{got, err}
+	}()
+
+	subBody, _ := json.Marshal(map[string]any{
+		"device_id": "phone-push",
+		"host_id":   d.HostID(),
+		"subscription": map[string]any{
+			"endpoint": "https://push.example/phone-push",
+			"keys":     map[string]string{"p256dh": "dGVzdA", "auth": "dGVzdA"},
+		},
+	})
+	sub, err := http.Post(ts.URL+"/push/subscribe", "application/json", bytes.NewReader(subBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.Body.Close()
+	if sub.StatusCode != 200 {
+		t.Fatalf("subscribe %s", sub.Status)
+	}
+
+	select {
+	case res := <-waited:
+		if res.err != nil {
+			t.Fatalf("wait-push: %v", res.err)
+		}
+		if ready, _ := res.got["ready"].(bool); !ready {
+			t.Fatalf("wait-push %+v", res.got)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("wait-push timed out")
+	}
+
+	st, err = Status(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parents, _ := st["parents"].([]any)
+	found := false
+	for _, raw := range parents {
+		m, _ := raw.(map[string]any)
+		if m["device_id"] == "phone-push" {
+			found = true
+			if ready, _ := m["push_ready"].(bool); !ready {
+				t.Fatalf("status parent %+v", m)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("parent missing from status %+v", st)
+	}
+}
