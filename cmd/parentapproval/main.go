@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	approot "parentapproval"
 	"parentapproval/internal/daemon"
 	"parentapproval/internal/protocol"
 	"parentapproval/internal/qrdisp"
@@ -123,9 +124,18 @@ Environment:
 `)
 }
 
-var version = "0.1.0"
+// Overridden at link time: -X main.version=... (make from VERSION, GoReleaser from the tag).
+var version = "dev"
 
-func readVersion() string { return version }
+func readVersion() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	if v := strings.TrimSpace(approot.VersionFile); v != "" {
+		return v
+	}
+	return version
+}
 
 var geteuid = os.Geteuid
 

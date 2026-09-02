@@ -41,6 +41,25 @@ func TestUsageOmitsEnable(t *testing.T) {
 	}
 }
 
+func TestReadVersionUsesVERSIONWhenUnset(t *testing.T) {
+	old := version
+	t.Cleanup(func() { version = old })
+	version = "dev"
+	got := readVersion()
+	if got == "" || got == "dev" {
+		t.Fatalf("expected VERSION file, got %q", got)
+	}
+}
+
+func TestReadVersionPrefersLdflags(t *testing.T) {
+	old := version
+	t.Cleanup(func() { version = old })
+	version = "9.9.9-test"
+	if got := readVersion(); got != "9.9.9-test" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestRequireRootErrorNamesCommand(t *testing.T) {
 	old := geteuid
 	t.Cleanup(func() { geteuid = old })

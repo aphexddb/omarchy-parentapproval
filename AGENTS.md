@@ -13,7 +13,7 @@ parentapproval ask --cmd "pacman -S cowsay"
 
 ## Release
 
-Bump the same version in `VERSION`, `PKGBUILD` (`pkgver`; reset `pkgrel` to 1), and `cmd/parentapproval/main.go` (`var version`). Commit, then tag and push — GoReleaser publishes Linux amd64 and arm64 binaries only.
+Bump the same version in `VERSION` and `PKGBUILD` (`pkgver`; reset `pkgrel` to 1). The CLI reads `VERSION` on `go build`; `make` and GoReleaser stamp it via `-X main.version`. Commit, then tag and push — Linux amd64 and arm64 binaries only.
 
 ```bash
 git tag -a vX.Y.Z -m "vX.Y.Z"

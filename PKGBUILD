@@ -24,7 +24,7 @@ source=()
 sha256sums=()
 
 _src_files=(
-  Makefile go.mod go.sum VERSION LICENSE README.md AGENTS.md install.sh
+  Makefile go.mod go.sum VERSION version.go LICENSE README.md AGENTS.md install.sh
   cmd internal web packaging default overlay
 )
 
