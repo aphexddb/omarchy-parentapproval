@@ -498,6 +498,7 @@ func presentAndWait(socket string, created map[string]any) error {
 		return nil
 	case "deny":
 		showOverlayVerdict(created, result, overlayOK)
+		notifyDenied(userName, cmd)
 		return fmt.Errorf("parent denied")
 	case "cancel":
 		return fmt.Errorf("cancelled")
@@ -711,18 +712,21 @@ func presentDisplay(created map[string]any) bool {
 	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
 		return false
 	}
-	kind, _ := created["kind"].(string)
-	if kind != "pair" && binExists("/usr/bin/omarchy-notification-send") {
-		_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰐲",
-			"Waiting for a parent",
-			fmt.Sprintf("%s wants to run %s", created["user"], created["cmd"]))
-	}
 	if summonOverlay(created) {
 		return true
 	}
 	url, _ := created["qr_url"].(string)
 	showPNG(url)
 	return false
+}
+
+func notifyDenied(userName, cmd string) {
+	if !binExists("/usr/bin/omarchy-notification-send") {
+		return
+	}
+	_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰅙",
+		"Parent denied",
+		fmt.Sprintf("%s wanted to run %s", userName, cmd))
 }
 
 func summonOverlay(created map[string]any) bool {

@@ -98,6 +98,34 @@ func TestOverlayPayloadPairKind(t *testing.T) {
 	}
 }
 
+func TestPresentDisplayAskSkipsNotification(t *testing.T) {
+	restoreDisplayHooks(t)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	var started []string
+	binExists = func(path string) bool {
+		return path == "/usr/bin/omarchy-shell" || path == "/usr/bin/omarchy-notification-send"
+	}
+	execCommandContext = func(ctx context.Context, name string, args ...string) error {
+		started = append(started, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
+		started = append(started, name+" "+strings.Join(args, " "))
+		return "ok\n", nil
+	}
+	presentDisplay(map[string]any{
+		"cmd": "ping", "user": "gardiner", "match": "515",
+		"qr_url": "https://parentapprovals.com/p/abc",
+	})
+	joined := strings.Join(started, "\n")
+	if strings.Contains(joined, "omarchy-notification-send") {
+		t.Fatalf("ask should not send a desktop notification: %q", joined)
+	}
+	if !strings.Contains(joined, "summon parentapproval") {
+		t.Fatalf("started %q", joined)
+	}
+}
+
 func TestPresentDisplayPairSkipsNotification(t *testing.T) {
 	restoreDisplayHooks(t)
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -123,6 +151,26 @@ func TestPresentDisplayPairSkipsNotification(t *testing.T) {
 	}
 	if !strings.Contains(joined, "summon parentapproval") {
 		t.Fatalf("started %q", joined)
+	}
+}
+
+func TestNotifyDeniedSendsNotification(t *testing.T) {
+	restoreDisplayHooks(t)
+	var started []string
+	binExists = func(path string) bool {
+		return path == "/usr/bin/omarchy-notification-send"
+	}
+	execCommandContext = func(ctx context.Context, name string, args ...string) error {
+		started = append(started, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	notifyDenied("gardiner", "pacman -S cowsay")
+	joined := strings.Join(started, "\n")
+	if !strings.Contains(joined, "omarchy-notification-send") {
+		t.Fatalf("deny should send a desktop notification: %q", joined)
+	}
+	if !strings.Contains(joined, "Parent denied") || !strings.Contains(joined, "pacman -S cowsay") {
+		t.Fatalf("deny notification %q", joined)
 	}
 }
 
