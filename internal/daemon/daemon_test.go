@@ -362,6 +362,87 @@ func TestPairConfirmFromPhone(t *testing.T) {
 	}
 }
 
+func TestPairWaitReturnsHostName(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := started["qr_url"].(string)
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sas := offerPair(t, url, "phone-host", "Mom Pixel", pub)
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-host", "sas": sas})
+	conf, err := http.Post(url+"/confirm", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conf.Body.Close()
+	if conf.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(conf.Body)
+		t.Fatalf("confirm %s %s", conf.Status, b)
+	}
+	wait, err := http.Get(url + "/wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wait.Body.Close()
+	if wait.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(wait.Body)
+		t.Fatalf("wait %s %s", wait.Status, b)
+	}
+	var done protocol.PairDone
+	if err := json.NewDecoder(wait.Body).Decode(&done); err != nil {
+		t.Fatal(err)
+	}
+	if !done.OK {
+		t.Fatalf("pair wait not ok: %+v", done)
+	}
+	if done.HostID != d.HostID() {
+		t.Fatalf("host_id %q want %q", done.HostID, d.HostID())
+	}
+	if done.HostName == "" || done.HostName != d.HostName() {
+		t.Fatalf("host_name %q want %q", done.HostName, d.HostName())
+	}
+	if done.DeviceID != "phone-host" {
+		t.Fatalf("device_id %q", done.DeviceID)
+	}
+}
+
+func TestTwoPairSessionsEnrollTwoParents(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	for _, phone := range []struct{ id, name string }{
+		{"phone-a", "Mom Pixel"},
+		{"phone-b", "Dad iPhone"},
+	} {
+		started, err := PairStart(sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		url := started["qr_url"].(string)
+		pub, _, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sas := offerPair(t, url, phone.id, phone.name, pub)
+		if _, err := PairConfirm(sock, started["sid"].(string), sas); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d.Store().ParentCount() != 2 {
+		t.Fatalf("parent count %d want 2", d.Store().ParentCount())
+	}
+	seen := map[string]string{}
+	for _, p := range d.Store().ListParents() {
+		seen[p.DeviceID] = p.Name
+	}
+	if seen["phone-a"] != "Mom Pixel" || seen["phone-b"] != "Dad iPhone" {
+		t.Fatalf("parents %+v", seen)
+	}
+}
+
 func TestSecondPairOfferRejected(t *testing.T) {
 	_, sock := startTestDaemon(t)
 	started, err := PairStart(sock)
