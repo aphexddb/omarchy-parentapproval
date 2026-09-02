@@ -242,6 +242,36 @@ func TestSafariHomeSimulation(t *testing.T) {
 	}
 }
 
+func TestPhoneStoresMultipleHostRecords(t *testing.T) {
+	cmd := exec.Command("node", "multi_host_sim.mjs")
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("multi_host_sim: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("unexpected sim output: %s", out)
+	}
+	raw, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		"async function saveRecord(hostId, rec)",
+		"tx.objectStore(STORE).put(rec, hostId)",
+		"host_name: r.host_name",
+		"host_name: done.host_name",
+		"existing.host_name = done.host_name",
+		"await saveRecord(done.host_id, existing)",
+		"for (const rec of paired)",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("app.js missing multi-host pairing %q", want)
+		}
+	}
+}
+
 func TestCryptoLibrarySRIMatchesFiles(t *testing.T) {
 	html, err := FS.ReadFile("index.html")
 	if err != nil {
