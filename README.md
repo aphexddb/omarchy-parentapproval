@@ -131,6 +131,20 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 
 `parentapproval --help` is the flag-level source of truth.
 
+## Releases
+
+[SemVer 2.0](https://semver.org/) tags (`vMAJOR.MINOR.PATCH`). Linux **amd64** and **arm64** only.
+
+```bash
+./scripts/stamp-version v1.2.3
+git add VERSION PKGBUILD
+git commit -m "Release v1.2.3"
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin HEAD v1.2.3
+```
+
+GoReleaser publishes Linux amd64 and arm64 archives and a `parentapproval-bin` AUR package (systemd unit, sysusers, sudoers, overlay, skill). The in-tree `PKGBUILD` stays a source checkout recipe. AUR push needs repo secret `AUR_KEY`. Dry-run: `make release-snapshot`.
+
 ## What this is not
 
 - Not a login or lock-screen replacement. The kid still unlocks the session with their own password.

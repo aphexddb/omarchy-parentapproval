@@ -13,12 +13,14 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	approot "parentapproval"
 	"parentapproval/internal/daemon"
 	"parentapproval/internal/protocol"
 	"parentapproval/internal/qrdisp"
@@ -126,9 +128,53 @@ Environment:
 `)
 }
 
-var version = "0.1.0"
+// Set at link time by make and GoReleaser:
+//
+//	-X main.version=...  -X main.commit=...
+var (
+	version = "dev"
+	commit  = ""
+)
 
-func readVersion() string { return version }
+func readVersion() string {
+	v := versionNumber()
+	if c := commitID(); c != "" {
+		return v + " (" + c + ")"
+	}
+	return v
+}
+
+func versionNumber() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	if v := strings.TrimSpace(approot.VersionFile); v != "" {
+		return v
+	}
+	return version
+}
+
+func commitID() string {
+	c := commit
+	if c == "" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, s := range info.Settings {
+				if s.Key == "vcs.revision" && s.Value != "" {
+					c = s.Value
+					break
+				}
+			}
+		}
+	}
+	return shortSHA(c)
+}
+
+func shortSHA(s string) string {
+	if len(s) > 7 {
+		return s[:7]
+	}
+	return s
+}
 
 var geteuid = os.Geteuid
 

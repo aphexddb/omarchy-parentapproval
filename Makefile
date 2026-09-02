@@ -3,10 +3,11 @@ DESTDIR ?=
 BIN := parentapproval
 RELAY := parentapproval-relay
 VERSION := $(shell cat VERSION)
+COMMIT := $(shell git rev-parse HEAD 2>/dev/null || true)
 GOFLAGS ?= -trimpath
-LDFLAGS := -s -w -X main.version=$(VERSION)
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: all build relay test install uninstall check-root-install check-root-uninstall
+.PHONY: all build relay test install uninstall check-root-install check-root-uninstall release-snapshot goreleaser-check
 
 all: build
 
@@ -34,6 +35,12 @@ relay:
 
 test:
 	go test ./cmd/... ./internal/... ./web
+
+goreleaser-check:
+	goreleaser check
+
+release-snapshot:
+	goreleaser release --snapshot --clean
 
 install: check-root-install build
 	install -Dm755 bin/$(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"

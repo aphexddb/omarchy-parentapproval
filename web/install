@@ -14,8 +14,7 @@
 # trust root.
 #   curl -fsSL https://parentapprovals.com/install | bash
 #
-# Default PARENTAPPROVAL_REF=main until a signed/tag release exists.
-# Pin with PARENTAPPROVAL_REF=<tag-or-sha>.
+# Default PARENTAPPROVAL_REF=main. Pin a SemVer tag with PARENTAPPROVAL_REF=vX.Y.Z.
 set -euo pipefail
 
 main() {
