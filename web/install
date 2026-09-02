@@ -27,18 +27,20 @@ if ! command -v git >/dev/null || ! command -v makepkg >/dev/null; then
 fi
 
 mkdir -p "$(dirname "$dir")"
-if [[ -d $dir/.git ]] && git -C "$dir" remote get-url origin >/dev/null 2>&1; then
-  echo "Updating $dir"
-  if git -C "$dir" fetch --depth=1 origin "$ref" && git -C "$dir" checkout -B "$ref" FETCH_HEAD; then
-    :
-  else
-    echo "Fresh clone of $repo"
-    rm -rf "$dir"
-    git clone --depth=1 --branch "$ref" "$repo" "$dir"
+if [[ -d $dir/.git ]]; then
+  origin=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
+  if [[ $origin != "$repo" && $origin != "${repo%.git}" && $origin != "${repo}.git" ]]; then
+    echo "parentapproval: $dir exists but origin is $origin, not $repo" >&2
+    exit 1
   fi
+  echo "Updating $dir"
+  git -C "$dir" fetch --depth=1 origin "$ref"
+  git -C "$dir" checkout -B "$ref" FETCH_HEAD
+elif [[ -e $dir ]]; then
+  echo "parentapproval: $dir exists and is not a git clone of $repo" >&2
+  exit 1
 else
   echo "Cloning $repo"
-  rm -rf "$dir"
   git clone --depth=1 --branch "$ref" "$repo" "$dir"
 fi
 
