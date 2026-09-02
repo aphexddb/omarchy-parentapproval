@@ -8,7 +8,7 @@ description: >
   testing an approval, or debugging kids sudo. Call this CLI; do not invent
   a password or wrap sudo. Triggers: parent permission, parent approve,
   kids sudo, omarchy-kids, sudo, pkexec, polkit, pacman, omarchy pkg,
-  pair phone, ask --cmd, setup-kid, parentapproval,
+  pair phone, ask -c, setup-kid, parentapproval,
   "approve sudo from my phone". Use when the user runs /parentapproval.
 ---
 
@@ -27,24 +27,27 @@ This is the app. Check `id -nG` for `omarchy-kids`.
 
 **Kid session:** run the privileged command as usual (`sudo pacman -S cowsay`,
 `pkexec …`, `omarchy pkg add …`). Do not wrap sudo. Do not ask for a password.
-PAM calls `parentapproval pam` for sudo; a session polkit agent does the same
-for ad-hoc polkit (not login). The paired phone buzzes; wait. The
-Omarchy skill's "type a sudo password / use pkexec because you are an agent"
-rule does not apply here.
+PAM calls `parentapproval pam` for sudo and may show a QR on that TTY.
+Ad-hoc polkit (not login) uses a session agent that phones the parent and
+waits — it must never render a parentapproval QR; the stock polkit prompt
+stays uncontaminated. The paired phone buzzes; wait. The Omarchy skill's
+"type a sudo password / use pkexec because you are an agent" rule does
+not apply here.
 
 **Ask from a coding agent** (this is the usual path; it runs the command after
 the parent approves):
 
 ```bash
-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask -c "pacman -S cowsay"
 ```
 
-`ask` shows the QR, waits for the phone, then the **daemon** runs `CMD` as
+`ask` waits for the phone, then the **daemon** runs `CMD` as
 root. There is no sudo password prompt. A one-shot grant also lets a matching
-`sudo` through PAM if something still wraps the command.
+`sudo` through PAM if something still wraps the command. Pass `-qr` to print
+a terminal QR; the default is a quiet countdown.
 
 **Wheel / not in `omarchy-kids`:** password or Omarchy passwordless sudo
-for a normal `sudo`. `ask --cmd` still phones a parent, then the daemon
+for a normal `sudo`. `ask -c` still phones a parent, then the daemon
 runs the command as root. Use `setup-kid` to put someone on the parent-phone path.
 
 ## Commands
@@ -53,8 +56,8 @@ Binary is `/usr/bin/parentapproval` after `makepkg -f -si` or `sudo make install
 
 | Intent | Command |
 |---|---|
-| Ask, then daemon runs CMD as root | `parentapproval ask --cmd "pacman -S cowsay"` |
-| Pair parent phone | `sudo parentapproval pair` |
+| Ask, then daemon runs CMD as root | `parentapproval ask -c "pacman -S cowsay"` |
+| Pair parent phone | `sudo parentapproval pair` (pass `-qr` to print a terminal QR) |
 | Create / lock a kid user | `sudo parentapproval setup-kid milo` |
 | Status / paired phones | `parentapproval status` |
 | List pending request | `parentapproval pending` |
@@ -72,7 +75,7 @@ daemon (`~/.local/state` + a per-user socket).
 ## Setup (parent wheel account)
 
 ```bash
-sudo parentapproval pair          # scan; compare the key-bound 6-digit code; confirm on the phone or type those digits on the overlay
+sudo parentapproval pair          # Wayland QR; compare the key-bound 6-digit code; confirm on the phone
 sudo parentapproval setup-kid milo
 sudo parentapproval install-skills
 ```
@@ -94,7 +97,7 @@ will not sudo.
 ```bash
 parentapproval daemon --dev          # terminal 1; state in ~/.local/state
 sudo parentapproval pair --dev       # terminal 2; scan
-parentapproval ask --dev --cmd "pacman -S cowsay"
+parentapproval ask --dev -c "pacman -S cowsay"
 ```
 
 `--dev` does not touch PAM or sudoers. It is local HTTP unless `--relay URL`
@@ -102,7 +105,7 @@ is set.
 
 ## When sudo does not prompt a parent
 
-1. Caller is not in `omarchy-kids` (wheel parent, or you). Use `ask --cmd`, or
+1. Caller is not in `omarchy-kids` (wheel parent, or you). Use `ask -c`, or
    `setup-kid`, or `sudo -u milo sudo pacman -S cowsay` from a kid session.
 2. No paired phone: `parentapproval status` then `sudo parentapproval pair`.
 3. Daemon down: `sudo parentapproval doctor` and `sudo systemctl start parentapprovald`.

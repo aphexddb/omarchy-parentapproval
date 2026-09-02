@@ -29,7 +29,7 @@ post_install() {
   echo "  sudo parentapproval setup-kid <kid-username>"
   echo "  sudo parentapproval install-skills"
   echo "Test without a kid account:"
-  echo "  parentapproval ask --cmd \"pacman -S cowsay\""
+  echo "  parentapproval ask -c \"pacman -S cowsay\""
 }
 
 post_upgrade() {

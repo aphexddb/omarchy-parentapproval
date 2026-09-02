@@ -1,38 +1,43 @@
 # Parent Approval
 
-The kid wants Steam. You are in the kitchen. You should not have to walk over, take the keyboard, and type `sudo`.
+Your child wants to install something. You are in the kitchen, or in a meeting. You should not have to walk over, take the keyboard, and type `sudo`!
 
-This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids accounts. Pair once. Add the page to your Home Screen. Allow notifications. Next time a child account needs to ask for permissions to do something, your phone buzzes, shows the command, and you approve or deny. The child never learns a sudo password, and **opening the request on an unpaired phone does nothing**.
+This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids accounts. Pair once. Add the page to your Home Screen on your phone and allow notifications. The next time a child account needs to ask for permissions to do something, your phone buzzes, shows the command, and you approve or deny. The child never learns a sudo password, and your life is easier. 
 
-A community extra for Omarchy.
+A community extra for Omarchy: for parents, by parents.
 
-Agents: load [`default/agents/skills/parentapproval/SKILL.md`](SKILL.md) (or run `sudo parentapproval install-skills`).
+Agents: load [SKILL.md](default/agents/skills/parentapproval/SKILL.md) (or run `sudo parentapproval install-skills`).
 
-first time setup (after the package is installed)
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aphexddb/omarchy-parentapproval/main/install.sh | bash
+```
+
+First time setup after the package is installed:
 ```bash
 sudo parentapproval pair
 sudo parentapproval setup-kid milo
 ```
 
-asking for approval
+Example of asking for approval (no side effects!)
 ```bash
-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask -c "sudo id"
 ```
 
 ## How it works
 
-1. **You pair once**, sitting at the laptop. Scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. The 6-digit code is derived from that key — a swapped key changes the digits. Confirm the code on the phone (or type those digits on the laptop overlay). The offering phone's name is shown so you can see whose key you are about to enroll.    
-2. **Add the page to Home Screen, tap Allow notifications.** `parentapproval pair` waits until notifications are on, then exits. After that the phone is a parent for this machine.
-3. **The kid hits sudo** (or a polkit prompt: pkexec, disks, package installs). They are in the `omarchy-kids` group, so PAM does not accept their login password. Login itself never phones a parent. The laptop asks the relay to notify paired phones.
-4. **Your phone buzzes.** Check the command and the match code, tap Approve. The phone signs the request the daemon already knows. One invocation, then it is spent. Replay is refuse.
+1. **You pair once**, sitting at the laptop. Run `sudo parentapproval pair` and scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. The 6-digit code is derived from that key — a swapped key changes the digits. Confirm the code on the phone (or type those digits on the laptop overlay). The offering phone's name is shown so you can see whose key you are about to enroll.    
+2. **Add the page to Home Screen, tap Allow notifications.** the pair command waits until notifications are on, then exits. After that the phone is a now a parent for this machine.
+3. **The kid hits sudo** (or a polkit prompt: pkexec, disks, package installs). They are in the `omarchy-kids` group, so PAM does not accept their login password. Login itself never phones a parent. The laptop asks the relay to notify paired phones. A polkit prompt stays bone stock — no parentapproval QR on that dialog. The QR card is for sudo TTY, `ask`, and pairing only.
+4. **Your phone buzzes.** Check the command and the match code, tap Approve. The phone signs the request based on the private key only the phone has, the computer verifies against the enrolled public key.
 
-Why this method vs TOTP? a kid who photographs an enrollment QR would own sudo forever.
+Why this method vs TOTP? a kid who photographs an enrollment QR would own sudo forever. There are no inbound firewall holes, phones speak HTTPS to the relay, and computer dials outbound WSS. **The approval path is only for `omarchy-kids`.**
 
-No inbound firewall holes, phones talk only to the HTTPS origin over WSS.
 
-Wheel parents still type a password. The approval path is only for `omarchy-kids`.
 
 ## Install
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aphexddb/omarchy-parentapproval/main/install.sh | bash
 ```
@@ -49,9 +54,7 @@ To remove (package, overlay, skill links, daemon state):
 ./scripts/dev-uninstall
 ```
 
-`sudo make install` also writes to `/usr`. Prefer the package so systemd sysusers, sudoers, PAM hooks, and the daemon unit are applied.
-
-Then teach coding agents the CLI:
+Teach coding agents the CLI:
 
 ```bash
 sudo parentapproval install-skills
@@ -59,43 +62,11 @@ sudo parentapproval install-skills
 
 That symlinks the skill into the parent’s and kids’ agent dirs (`~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.gemini/config/skills`, and `~/.grok/skills`). `setup-kid` does the same for the kid.
 
-Then, as the parent (your wheel account, not the kid):
-
-```bash
-sudo parentapproval pair          # scan; keys land in /var/lib via the systemd daemon
-sudo parentapproval setup-kid milo
-```
-
-The package install applies PAM, sudoers, the `omarchy-kids` group, and the daemon. `ask`, `pending`, and `status` talk to the systemd daemon as a regular user. Pair, revoke, doctor, disable, setup-kid, and install-skills need sudo. Use `--dev` only for an unprivileged local dry-run of the daemon.
-
-Optional desktop overlay, so polkit and GUI prompts get the same QR card:
-
-```bash
-omarchy plugin add "$PWD/overlay"
-# or copy overlay/ to ~/.config/omarchy/plugins/parentapproval/
-```
-
-`setup-kid` creates the account if it does not exist. That password is for login and the lock screen. It will not sudo. You keep your own account; that is the emergency fallback when the phone is dead. It also links the agent skill into that kid's home so their coding agents load it without a separate `install-skills`.
-
 ## Relay
 
-Default origin: **https://parentapprovals.com**. That origin is the phone's
-**code trust root**: it serves the PWA that holds the parent private key.
-A compromised relay can exfiltrate the key or silently sign an allow. The
-cryptographic core still stops a compromised *laptop* and a passive network.
-High-assurance families should self-host. See [`docs/trust-model.md`](docs/trust-model.md).
+Default origin: **https://parentapprovals.com**. That origin is the phone's **code trust root**: it serves the PWA that holds the parent private key. A compromised relay can exfiltrate the key or silently sign an allow. The cryptographic core still stops a compromised *laptop* and a passive network.
 
-Self-hosters set:
-
-- Laptop: `OMARCHY_PARENTAPPROVAL_RELAY` or `parentapproval daemon --relay URL`
-- Relay process: `RELAY_PUBLIC_URL` (or `PUBLIC_URL`) and `RELAY_DATA` (default `/data`)
-
-`--relay=off` is local-only HTTP (`--dev`). Production does not open a LAN listen port.
-
-`nacl.min.js` and `sha256.min.js` are Subresource Integrity pinned. Release
-hashes are in [`docs/web-assets.md`](docs/web-assets.md).
-
-See [`deploy/relay/README.md`](deploy/relay/README.md) for Railway and optional Caddy compose. Do not terminate TLS in the relay container.
+High-assurance families should self-host. See [trust model](docs/trust-model.md) for more information.
 
 ## Try it without a kid account
 
@@ -104,8 +75,16 @@ Unprivileged (`--dev` is local HTTP, no PAM):
 ```bash
 parentapproval daemon --dev      # terminal 1
 sudo parentapproval pair --dev   # terminal 2, scan
-parentapproval ask --dev --cmd "pacman -S cowsay"
+parentapproval ask --dev -c "pacman -S cowsay"
 ```
+
+Headless pair + allow/deny against the production relay image (no phone):
+
+```bash
+make smoke
+```
+
+That builds `Dockerfile`, starts an isolated compose project on loopback, and drives a Go fake-phone over the same HTTP the PWA uses (`/p/{token}`, key-bound SAS, phone confirm, sealed ask, handoff, `/v1/watch` with a one-time nonce, allow/deny). `make test` does not start Docker. GitHub Actions runs both (`make test` and `PARENTAPPROVAL_SMOKE=1 make smoke`) on every push and pull request.
 
 Against a local relay:
 
@@ -119,7 +98,7 @@ parentapproval daemon --dev --relay http://127.0.0.1:8080
 Against the installed systemd daemon (phone already paired):
 
 ```bash
-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask -c "pacman -S cowsay"
 ```
 
 After a parent approves, the daemon runs that command as root. No sudo password.
@@ -128,9 +107,9 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 
 | Command | What it does |
 |---|---|
-| `parentapproval ask --cmd "…"` | Ask a parent; daemon runs the command as root |
+| `parentapproval ask -c "…"` | Ask a parent; daemon runs the command as root |
 | `sudo parentapproval pair` | Pair a parent phone |
-| `sudo parentapproval setup-kid NAME` | Create/lock a kid user |
+| `sudo parentapproval setup-kid NAME` | Creates a user (or adds them to omarchy-kids) and sets a login password. That password cannot sudo. |
 | `sudo parentapproval disable` | Remove PAM hooks without uninstalling |
 | `parentapproval status` | Host id, relay, paired phones |
 | `sudo parentapproval revoke DEVICE_ID` | Drop a phone |
@@ -141,8 +120,6 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 `parentapproval --help` is the flag-level source of truth.
 
 ## Releases
-
-[SemVer 2.0](https://semver.org/) tags (`vMAJOR.MINOR.PATCH`). Linux **amd64** and **arm64** only.
 
 ```bash
 ./scripts/stamp-version v1.2.3
@@ -164,4 +141,4 @@ Phone lock and OS biometrics are the residual control if the kid gets your unloc
 
 ## Protocol
 
-Ed25519 over canonical bytes, not JSON. Specified in [`docs/SPEC.md`](docs/SPEC.md). Wire prefix `OMARCHY-APPROVE/1` is frozen so already-paired phones keep working.
+Ed25519 over canonical bytes, not JSON. Specified in [`docs/SPEC.md`](docs/SPEC.md). 

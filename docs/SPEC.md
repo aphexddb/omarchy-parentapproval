@@ -163,21 +163,27 @@ Ad-hoc polkit (pkexec, disks, packagekit — not display-manager or
 `login1.create-session`) uses `/usr/share/polkit-1/rules.d/50-parentapproval.rules`
 so kids `AUTH_SELF` instead of `auth_admin`. The session unit
 `parentapproval-polkit.service` registers an agent for `omarchy-kids` only:
-it shows the same parent-phone request as sudo, with the polkit command
-from `command_line` / `program` / the action message. After allow, the
-agent completes `polkit-agent-helper-1`; PAM redeems the one-shot grant
-so the parent is not asked twice. The grant is bound to the polkit
-action id and cookie; `RedeemService` must present both. Wheel sessions
-leave the Omarchy password agent in place.
+it phones the parent with the polkit command from `command_line` /
+`program` / the action message and waits with **no laptop QR, overlay, or
+imv**. After allow, the agent completes `polkit-agent-helper-1`; PAM
+redeems the one-shot grant so the parent is not asked twice. The grant is
+bound to the polkit action id and cookie; `RedeemService` must present
+both. Wheel sessions leave the Omarchy password agent in place. A polkit
+prompt stays bone stock — `parentapproval pam` must not write a QR to
+stdout (that would become PAM_TEXT_INFO on the stock dialog).
 
-Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`:
+Kids (`omarchy-kids`) on `/etc/pam.d/sudo`:
 
 ```
 auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup omarchy-kids
 auth [success=done default=die] pam_exec.so seteuid stdout /usr/bin/parentapproval pam
 ```
 
-Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. The two auth lines live in `/etc/pam.d/parentapproval`; `sudo` and `polkit-1` `auth include` that file at the top. `apply-hooks` rewrites the include and re-hoists the include line so a later `1i auth sufficient pam_u2f.so` / `pam_fprintd.so` (Omarchy's fingerprint/FIDO setup scripts) does not win. `doctor` fails if any `auth sufficient` appears above the include. After enabling fingerprint or FIDO on a kid machine, re-run `sudo parentapproval apply-hooks`.
+Kids on `/etc/pam.d/polkit-1` include `/etc/pam.d/parentapproval-polkit`
+instead: the same `pam_succeed_if` / `pam_exec` pair, **without** the
+`stdout` flag.
+
+Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. The sudo auth lines live in `/etc/pam.d/parentapproval`; `sudo` `auth include`s that file at the top and `polkit-1` includes `parentapproval-polkit`. `apply-hooks` rewrites the includes and re-hoists the include line so a later `1i auth sufficient pam_u2f.so` / `pam_fprintd.so` (Omarchy's fingerprint/FIDO setup scripts) does not win. `doctor` fails if any `auth sufficient` appears above the include. After enabling fingerprint or FIDO on a kid machine, re-run `sudo parentapproval apply-hooks`.
 
 Sudoers:
 

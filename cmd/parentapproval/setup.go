@@ -14,15 +14,17 @@ import (
 )
 
 const (
-	pamMarker       = "parentapproval pam"
-	pamIncludeName  = "parentapproval"
-	pamIncludePath  = "/etc/pam.d/parentapproval"
-	sudoersKid      = "/etc/sudoers.d/omarchy-kids"
-	unitName        = "parentapprovald.service"
-	legacyUnitName  = "omarchy-parentapprovald.service"
-	polkitUserUnit  = "parentapproval-polkit.service"
-	skillName       = "parentapproval"
-	legacySkillName = "omarchy-parentapproval"
+	pamMarker            = "parentapproval pam"
+	pamIncludeName       = "parentapproval"
+	pamIncludePath       = "/etc/pam.d/parentapproval"
+	pamPolkitIncludeName = "parentapproval-polkit"
+	pamPolkitIncludePath = "/etc/pam.d/parentapproval-polkit"
+	sudoersKid           = "/etc/sudoers.d/omarchy-kids"
+	unitName             = "parentapprovald.service"
+	legacyUnitName       = "omarchy-parentapprovald.service"
+	polkitUserUnit       = "parentapproval-polkit.service"
+	skillName            = "parentapproval"
+	legacySkillName      = "omarchy-parentapproval"
 )
 
 func cmdApplyHooks() error {
@@ -76,6 +78,7 @@ func removeHooks() {
 	_ = unpatchPAM("/etc/pam.d/sudo")
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
 	_ = os.Remove(pamIncludePath)
+	_ = os.Remove(pamPolkitIncludePath)
 	_ = exec.Command("systemctl", "--global", "disable", polkitUserUnit).Run()
 	unlinkInstalledSkills()
 }
@@ -215,21 +218,25 @@ Defaults:%` + protocol.KidsGroup + ` timestamp_timeout=0
 }
 
 func writePAMInclude() error {
-	return os.WriteFile(pamIncludePath, []byte(pamAuthLines()), 0o644)
+	if err := os.WriteFile(pamIncludePath, []byte(pamAuthLines()), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(pamPolkitIncludePath, []byte(pamPolkitAuthLines()), 0o644)
 }
 
 func patchPAM(path string) error {
+	include := pamIncludeFor(path)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) && filepath.Base(path) == "polkit-1" {
-			body := pamLines() + "auth      required pam_unix.so\naccount   required pam_unix.so\npassword  required pam_unix.so\nsession   required pam_unix.so\n"
+			body := include + "auth      required pam_unix.so\naccount   required pam_unix.so\npassword  required pam_unix.so\nsession   required pam_unix.so\n"
 			return os.WriteFile(path, []byte(body), 0o644)
 		}
 		return err
 	}
 	// Re-hoist so a later `1i auth sufficient pam_u2f.so` / fprintd prepend does not win.
 	text := stripPAM(string(raw))
-	return os.WriteFile(path, []byte(pamLines()+text), 0o644)
+	return os.WriteFile(path, []byte(include+text), 0o644)
 }
 
 func unpatchPAM(path string) error {
@@ -240,22 +247,49 @@ func unpatchPAM(path string) error {
 	return os.WriteFile(path, []byte(stripPAM(string(raw))), 0o644)
 }
 
-func pamAuthLines() string {
+func pamHelperPath() string {
 	exe := "/usr/bin/parentapproval"
 	if p, err := os.Executable(); err == nil {
 		if abs, err := filepath.Abs(p); err == nil {
 			exe = abs
 		}
 	}
+	return exe
+}
+
+func pamAuthLines() string {
 	return "" +
 		"# parentapproval: kids skip password; non-kids skip this block.\n" +
 		"auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup " + protocol.KidsGroup + "\n" +
-		"auth [success=done default=die] pam_exec.so seteuid stdout " + exe + " pam\n"
+		"auth [success=done default=die] pam_exec.so seteuid stdout " + pamHelperPath() + " pam\n"
+}
+
+// pamPolkitAuthLines is the polkit include. No pam_exec stdout: that flag
+// forwards helper text into the authentication agent as PAM_TEXT_INFO and
+// would draw a parentapproval QR on a stock polkit prompt.
+func pamPolkitAuthLines() string {
+	return "" +
+		"# parentapproval: kids skip password; non-kids skip this block.\n" +
+		"# polkit stays stock: pam_exec must not echo helper stdout into the dialog.\n" +
+		"auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup " + protocol.KidsGroup + "\n" +
+		"auth [success=done default=die] pam_exec.so seteuid " + pamHelperPath() + " pam\n"
 }
 
 func pamLines() string {
 	return "# parentapproval: kids skip password; non-kids skip this block.\n" +
 		"auth include " + pamIncludeName + "\n"
+}
+
+func pamPolkitLines() string {
+	return "# parentapproval: kids skip password; non-kids skip this block.\n" +
+		"auth include " + pamPolkitIncludeName + "\n"
+}
+
+func pamIncludeFor(path string) string {
+	if filepath.Base(path) == "polkit-1" {
+		return pamPolkitLines()
+	}
+	return pamLines()
 }
 
 func pamHookInstalled(text string) bool {
@@ -300,7 +334,8 @@ func stripPAM(text string) string {
 			}
 			continue
 		}
-		if strings.Contains(line, "auth include "+pamIncludeName) {
+		if strings.Contains(line, "auth include "+pamIncludeName) ||
+			strings.Contains(line, "auth include "+pamPolkitIncludeName) {
 			continue
 		}
 		if strings.Contains(line, pamMarker) || (strings.Contains(line, "pam_exec.so") && strings.Contains(line, "parentapproval")) {
@@ -358,7 +393,7 @@ func cmdInstallSkills() error {
 	if linked == 0 {
 		return fmt.Errorf("did not link the skill into any agent directory")
 	}
-	fmt.Println("Agents will pick up /parentapproval. Try: parentapproval ask --cmd \"echo ok\"")
+	fmt.Println("Agents will pick up /parentapproval. Try: parentapproval ask -c \"echo ok\"")
 	return nil
 }
 

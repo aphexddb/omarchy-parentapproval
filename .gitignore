@@ -2,6 +2,7 @@ bin/
 dist/
 *.png
 !web/*.png
+!docs/*.png
 /pkg/
 /src/
 *.pkg.tar.zst

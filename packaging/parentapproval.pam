@@ -1,6 +1,7 @@
 # parentapproval: kids skip password; non-kids skip this block.
-# Included from /etc/pam.d/sudo and polkit-1. apply-hooks rewrites this
-# file and re-hoists `auth include parentapproval` so a later fingerprint
-# or FIDO `auth sufficient` prepend does not bypass kids.
+# Included from /etc/pam.d/sudo. Polkit uses parentapproval-polkit (no
+# pam_exec stdout) so a stock dialog cannot render a QR. apply-hooks
+# rewrites this file and re-hoists `auth include parentapproval` so a
+# later fingerprint or FIDO `auth sufficient` prepend does not bypass kids.
 auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup omarchy-kids
 auth [success=done default=die] pam_exec.so seteuid stdout /usr/bin/parentapproval pam
