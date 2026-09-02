@@ -22,7 +22,8 @@ const (
 	DecisionDeny    = "deny"
 	DefaultAskTTL   = 120
 	DefaultPairTTL  = 600
-	WatchAuthMax    = 180
+	WatchAuthMax    = 60
+	WatchNonceMin   = 16
 	ListenPort      = 17421
 	KidsGroup       = "omarchy-kids"
 	DefaultRelayURL = "https://parentapprovals.com"
@@ -105,13 +106,39 @@ func Canonical(decision, ridHex, nonceB64 string, exp int64, hostIDB64, user, se
 }
 
 // CanonicalWatch is signed by a paired parent phone to subscribe to live asks.
-// host_id is B64(host pubkey), not the hostname. exp is unix seconds.
-func CanonicalWatch(hostID, deviceID string, exp int64) []byte {
-	return []byte(fmt.Sprintf("%s\n%s\n%s\n%d\n", WatchPrefix, hostID, deviceID, exp))
+// host_id is B64(host pubkey), not the hostname. nonce is unpadded base64url
+// of at least WatchNonceMin random bytes, unique per poll. exp is unix seconds.
+func CanonicalWatch(hostID, deviceID, nonce string, exp int64) []byte {
+	return []byte(fmt.Sprintf("%s\n%s\n%s\n%s\n%d\n", WatchPrefix, hostID, deviceID, nonce, exp))
 }
 
 func WatchAuthFresh(exp, now int64) bool {
 	return exp > now && exp <= now+WatchAuthMax
+}
+
+// ValidWatchNonce accepts an unpadded base64url nonce of at least 16 bytes.
+func ValidWatchNonce(nonce string) bool {
+	raw, err := DecodeB64(nonce)
+	return err == nil && len(raw) >= WatchNonceMin
+}
+
+// ConsumeWatchNonce records a used (device, nonce) until exp. A repeat is
+// rejected so a captured watch URL cannot be replayed inside the window.
+func ConsumeWatchNonce(used map[string]int64, deviceID, nonce string, exp, now int64) bool {
+	if used == nil || deviceID == "" || nonce == "" {
+		return false
+	}
+	for k, e := range used {
+		if e <= now {
+			delete(used, k)
+		}
+	}
+	key := deviceID + "\x00" + nonce
+	if _, ok := used[key]; ok {
+		return false
+	}
+	used[key] = exp
+	return true
 }
 
 func Sign(priv ed25519.PrivateKey, canonical []byte) []byte {

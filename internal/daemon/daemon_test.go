@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -1185,11 +1186,20 @@ func waitHTTP(t *testing.T, d *Daemon) string {
 }
 
 func signedWatchURL(base, hostID, deviceID string, priv ed25519.PrivateKey) string {
+	nonce := make([]byte, protocol.WatchNonceMin)
+	if _, err := rand.Read(nonce); err != nil {
+		panic(err)
+	}
+	return signedWatchURLNonce(base, hostID, deviceID, priv, protocol.B64(nonce))
+}
+
+func signedWatchURLNonce(base, hostID, deviceID string, priv ed25519.PrivateKey, nonce string) string {
 	exp := time.Now().Add(time.Minute).Unix()
-	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, exp))
+	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, nonce, exp))
 	q := url.Values{}
 	q.Set("host_id", hostID)
 	q.Set("device_id", deviceID)
+	q.Set("nonce", nonce)
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("sig", protocol.B64(sig))
 	return base + "/v1/watch?" + q.Encode()
@@ -1317,5 +1327,31 @@ func TestWatchIdleWrongHost(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status %s", res.Status)
+	}
+}
+
+func TestWatchRejectsReplay(t *testing.T) {
+	old := watchHold
+	watchHold = 20 * time.Millisecond
+	defer func() { watchHold = old }()
+	d, _ := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	base := waitHTTP(t, d)
+	u := signedWatchURL(base, d.HostID(), deviceID, priv)
+	res, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("first watch %s", res.Status)
+	}
+	res2, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replay status %s", res2.Status)
 	}
 }

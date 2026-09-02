@@ -76,7 +76,8 @@ type Daemon struct {
 
 	sockLn   net.Listener
 	relay    *relayClient
-	watchers []chan watchEvent
+	watchers    []chan watchEvent
+	watchNonces map[string]int64
 }
 
 type pairSession struct {
@@ -157,6 +158,7 @@ func Open(cfg Config) (*Daemon, error) {
 		requests:     map[string]*Request{},
 		byUser:       map[string]string{},
 		pushReadyIDs: map[string]bool{},
+		watchNonces:  map[string]int64{},
 	}
 	if cfg.RelayURL != "" {
 		d.relay = newRelayClient(d, cfg.RelayURL)
@@ -1191,8 +1193,8 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 
 func (d *Daemon) handleWatch(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	if q.Get("host_id") == "" || q.Get("device_id") == "" || q.Get("sig") == "" || q.Get("exp") == "" {
-		http.Error(w, `{"error":"host_id, device_id, exp, sig required"}`, http.StatusBadRequest)
+	if q.Get("host_id") == "" || q.Get("device_id") == "" || q.Get("sig") == "" || q.Get("exp") == "" || q.Get("nonce") == "" {
+		http.Error(w, `{"error":"host_id, device_id, nonce, exp, sig required"}`, http.StatusBadRequest)
 		return
 	}
 	if !d.verifyWatchAuth(req) {
@@ -1229,9 +1231,10 @@ func (d *Daemon) verifyWatchAuth(req *http.Request) bool {
 	q := req.URL.Query()
 	hostID := strings.TrimSpace(q.Get("host_id"))
 	deviceID := strings.TrimSpace(q.Get("device_id"))
+	nonce := strings.TrimSpace(q.Get("nonce"))
 	sigB64 := strings.TrimSpace(q.Get("sig"))
 	exp, err := strconv.ParseInt(strings.TrimSpace(q.Get("exp")), 10, 64)
-	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" {
+	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" || !protocol.ValidWatchNonce(nonce) {
 		return false
 	}
 	if hostID != d.HostID() || !protocol.WatchAuthFresh(exp, time.Now().Unix()) {
@@ -1249,7 +1252,12 @@ func (d *Daemon) verifyWatchAuth(req *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, exp), sig)
+	if !protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, nonce, exp), sig) {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return protocol.ConsumeWatchNonce(d.watchNonces, deviceID, nonce, exp, time.Now().Unix())
 }
 
 func (d *Daemon) liveAskEventLocked() *watchEvent {

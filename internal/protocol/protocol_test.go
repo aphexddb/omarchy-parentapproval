@@ -85,11 +85,35 @@ func TestCanonicalWatchVector(t *testing.T) {
 	got := string(CanonicalWatch(
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"phone-1",
+		"AAAAAAAAAAAAAAAAAAAAAA",
 		1735689660,
 	))
-	want := "OMARCHY-WATCH/1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nphone-1\n1735689660\n"
+	want := "OMARCHY-WATCH/1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nphone-1\nAAAAAAAAAAAAAAAAAAAAAA\n1735689660\n"
 	if got != want {
 		t.Fatalf("canonical watch mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestConsumeWatchNonce(t *testing.T) {
+	used := map[string]int64{}
+	if !ConsumeWatchNonce(used, "phone-1", "n1", 1100, 1000) {
+		t.Fatal("first nonce rejected")
+	}
+	if ConsumeWatchNonce(used, "phone-1", "n1", 1100, 1000) {
+		t.Fatal("replay accepted")
+	}
+	if !ConsumeWatchNonce(used, "phone-1", "n2", 1100, 1000) {
+		t.Fatal("new nonce rejected")
+	}
+	if ConsumeWatchNonce(used, "phone-1", "n1", 1100, 1100) {
+		// expired entries are pruned; n1's exp is 1100 so at now=1100 it is gone
+		// and would be accepted as a new use — only replay while exp>now matters.
+	}
+	if !ValidWatchNonce(B64(make([]byte, 16))) {
+		t.Fatal("16-byte nonce rejected")
+	}
+	if ValidWatchNonce(B64(make([]byte, 8))) || ValidWatchNonce("") {
+		t.Fatal("short nonce accepted")
 	}
 }
 

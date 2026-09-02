@@ -796,18 +796,27 @@ function sleep(ms, signal) {
   });
 }
 
-function canonicalWatch(hostId, deviceId, exp) {
-  return enc.encode(`OMARCHY-WATCH/1\n${hostId}\n${deviceId}\n${exp}\n`);
+function watchNonce() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return b64url(b);
+}
+
+function canonicalWatch(hostId, deviceId, nonce, exp) {
+  return enc.encode(`OMARCHY-WATCH/1\n${hostId}\n${deviceId}\n${nonce}\n${exp}\n`);
 }
 
 function watchQuery(rec) {
   const exp = Math.floor(Date.now() / 1000) + 60;
-  const sig = b64url(signCanonical(b64urlToBytes(rec.secret), canonicalWatch(rec.host_id, rec.device_id, exp)));
+  const nonce = watchNonce();
+  const sig = b64url(signCanonical(b64urlToBytes(rec.secret), canonicalWatch(rec.host_id, rec.device_id, nonce, exp)));
   return (
     "host_id=" +
     encodeURIComponent(rec.host_id) +
     "&device_id=" +
     encodeURIComponent(rec.device_id) +
+    "&nonce=" +
+    encodeURIComponent(nonce) +
     "&exp=" +
     exp +
     "&sig=" +

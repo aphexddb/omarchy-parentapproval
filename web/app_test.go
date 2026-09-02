@@ -55,6 +55,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function watchOne",
 		"function watchQuery",
 		"function canonicalWatch",
+		"function watchNonce",
+		"&nonce=",
 		"function handleLiveAsk",
 		"function listenLiveAsk",
 		"function ridFromWatchEvent",

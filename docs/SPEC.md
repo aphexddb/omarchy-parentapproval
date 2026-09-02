@@ -112,7 +112,7 @@ host keys do not. Knowing `host_id` still must not let a stranger watch asks.
 The open PWA long-polls one host at a time with a paired-phone signature:
 
 ```
-GET /v1/watch?host_id=&device_id=&exp=&sig=
+GET /v1/watch?host_id=&device_id=&nonce=&exp=&sig=
 ```
 
 `sig` is Ed25519 over these bytes (trailing newline after every field):
@@ -121,10 +121,13 @@ GET /v1/watch?host_id=&device_id=&exp=&sig=
 OMARCHY-WATCH/1
 <host_id>
 <device_id>
+<nonce base64url>
 <exp unix seconds>
 ```
 
-`exp` must be in `(now, now+180]`. The relay verifies against the pubkey the
+`nonce` is 16 random bytes, unpadded base64url, unique per poll. A captured
+signature cannot be replayed: the server remembers `(device_id, nonce)` until
+`exp`. `exp` must be in `(now, now+60]`. The relay verifies against the pubkey the
 laptop enrolled (`{op:parent}`). Local `--dev` HTTP verifies against the
 daemon's stored parent. Missing fields are 400; a bad or unknown key is 401
 and does not wait.
