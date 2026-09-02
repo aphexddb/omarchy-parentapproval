@@ -436,7 +436,7 @@ function showIdle(recs) {
 function showDecision(decision) {
   const allowed = decision === "allow";
   $("result-title").textContent = allowed ? "Approved" : "Denied";
-  $("result-text").textContent = allowed ? "The laptop can continue." : "The request was denied.";
+  $("result-text").textContent = allowed ? "The person can continue." : "The request was denied.";
   show("result");
   settleHomeURL();
   const el = $("result");
