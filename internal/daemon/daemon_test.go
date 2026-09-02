@@ -579,6 +579,30 @@ func TestRedeemAfterAllow(t *testing.T) {
 	}
 }
 
+func TestPolkitPendingOmitsQR(t *testing.T) {
+	_, sock := startTestDaemon(t)
+	created, err := CreateAction(sock, "milo", "polkit", "/", "/usr/bin/true", 30, "org.freedesktop.policykit.exec", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := created["qr_url"].(string); !ok {
+		t.Fatal("create still returns a phone URL; only laptop pending must hide it")
+	}
+	st, err := Pending(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st["matrix"]; ok {
+		t.Fatalf("polkit pending must not include a QR matrix: %+v", st)
+	}
+	if _, ok := st["qr_url"]; ok {
+		t.Fatalf("polkit pending must not include qr_url: %+v", st)
+	}
+	if st["service"] != "polkit" {
+		t.Fatalf("service %v", st["service"])
+	}
+}
+
 func TestRedeemPolkitServiceAfterAllow(t *testing.T) {
 	d, sock := startTestDaemon(t)
 	priv, deviceID := enrollParent(t, d)

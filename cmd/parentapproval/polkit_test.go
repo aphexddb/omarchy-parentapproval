@@ -79,6 +79,40 @@ func TestPolkitSkipLoginActions(t *testing.T) {
 	}
 }
 
+func TestPamPolkitUsesSilentWait(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "if polkit {\n\t\t// pam_exec stdout would paint a QR into the stock polkit dialog.\n\t\treturn waitForParent") {
+		t.Fatal("cmdPam must wait silently for polkit; presentAndWait would render a QR")
+	}
+}
+
+func TestPolkitAgentNeverPresentsQR(t *testing.T) {
+	raw, err := os.ReadFile("polkit.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, ban := range []string{
+		"presentAndWait",
+		"presentDisplay",
+		"summonOverlay",
+		"showPNG",
+		"qrdisp",
+		"overlayPayload",
+	} {
+		if strings.Contains(s, ban) {
+			t.Errorf("polkit agent must not call %s", ban)
+		}
+	}
+	if !strings.Contains(s, "waitForParent") {
+		t.Fatal("polkit agent must wait for the phone without rendering")
+	}
+}
+
 func TestPolkitRulesFile(t *testing.T) {
 	raw, err := os.ReadFile("../../packaging/50-parentapproval.rules")
 	if err != nil {

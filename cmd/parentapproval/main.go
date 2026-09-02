@@ -609,7 +609,7 @@ func cmdPam() error {
 	}
 	cwd := readCwd(os.Getppid())
 	cmd := readCmdline(os.Getppid(), cwd)
-	polkit := service == "polkit-1" || service == "polkit"
+	polkit := protocol.PolkitService(service)
 	if polkit {
 		action, cookie := polkitRedeemIDs()
 		if ok, err := daemon.RedeemServiceAction(p.socket, userName, "polkit", action, cookie); err == nil && ok {
@@ -627,10 +627,11 @@ func cmdPam() error {
 		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
-	if err := presentAndWait(p.socket, created); err != nil {
-		return err
+	if polkit {
+		// pam_exec stdout would paint a QR into the stock polkit dialog.
+		return waitForParent(p.socket, created)
 	}
-	return nil
+	return presentAndWait(p.socket, created)
 }
 
 func presentAndWait(socket string, created map[string]any) error {
@@ -657,11 +658,10 @@ func presentAndWait(socket string, created map[string]any) error {
 		_, _ = daemon.Cancel(socket, rid)
 	})
 
-	waited, err := daemon.Wait(socket, rid)
+	result, err := waitResult(socket, rid)
 	if err != nil {
 		return err
 	}
-	result, _ := waited["result"].(string)
 	switch result {
 	case "allow":
 		fmt.Println("Parent approved.")
@@ -676,6 +676,43 @@ func presentAndWait(socket string, created map[string]any) error {
 	default:
 		return fmt.Errorf("timed out waiting for a parent")
 	}
+}
+
+// waitForParent waits for the phone with no laptop QR, overlay, or stdout.
+// Polkit must stay a stock helper conversation.
+func waitForParent(socket string, created map[string]any) error {
+	rid, _ := created["rid"].(string)
+	cmd, _ := created["cmd"].(string)
+	userName, _ := created["user"].(string)
+
+	onInterrupt(func() {
+		_, _ = daemon.Cancel(socket, rid)
+	})
+
+	result, err := waitResult(socket, rid)
+	if err != nil {
+		return err
+	}
+	switch result {
+	case "allow":
+		return nil
+	case "deny":
+		notifyDenied(userName, cmd)
+		return fmt.Errorf("parent denied")
+	case "cancel":
+		return fmt.Errorf("cancelled")
+	default:
+		return fmt.Errorf("timed out waiting for a parent")
+	}
+}
+
+func waitResult(socket, rid string) (string, error) {
+	waited, err := daemon.Wait(socket, rid)
+	if err != nil {
+		return "", err
+	}
+	result, _ := waited["result"].(string)
+	return result, nil
 }
 
 const overlayVerdictHold = 2 * time.Second

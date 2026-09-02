@@ -180,6 +180,10 @@ Item {
             }
             return
           }
+          if (data.service === "polkit" || data.service === "polkit-1") {
+            // Polkit stays bone stock. Never render a parentapproval QR.
+            return
+          }
           root.kind = "ask"
           root.user = data.user || ""
           root.cmd = data.cmd || ""
