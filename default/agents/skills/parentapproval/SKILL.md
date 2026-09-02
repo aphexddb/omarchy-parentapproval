@@ -113,7 +113,9 @@ is set.
 ## Relay
 
 Default HTTPS origin: **https://parentapprovals.com**. The laptop dials it
-outbound over WSS. The phone never talks to the laptop. Self-hosters set
+outbound over WSS. The phone never talks to the laptop. That origin also
+serves the PWA that holds the parent key — it is the phone's code trust
+root. High-assurance use should self-host. Self-hosters set
 `OMARCHY_PARENTAPPROVAL_RELAY` on the laptop and `RELAY_PUBLIC_URL` on the
 relay. `--relay=off` is local-only.
 

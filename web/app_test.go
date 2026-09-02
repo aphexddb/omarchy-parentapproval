@@ -1,6 +1,10 @@
 package web
 
 import (
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"strings"
@@ -78,6 +82,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`curl -fsSL https://parentapprovals.com/install | bash`,
 		`class="copy-btn"`,
 		`the request shows here right away`,
+		`integrity="sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/"`,
+		`integrity="sha384-2hE+62EhDTI8GB1l6/KBZldM8qsy8CUJ/e5YlZaSbD6Bi4z0YhdrH2LCjDqYXAkg"`,
 	} {
 		if !strings.Contains(htmlS, want) {
 			t.Errorf("index.html missing %q", want)
@@ -163,6 +169,41 @@ func TestSafariHomeSimulation(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "ok") {
 		t.Fatalf("unexpected sim output: %s", out)
+	}
+}
+
+func TestCryptoLibrarySRIMatchesFiles(t *testing.T) {
+	html, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlS := string(html)
+	for _, name := range []string{"nacl.min.js", "sha256.min.js"} {
+		raw, err := FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha512.Sum384(raw)
+		pin := "sha384-" + base64.StdEncoding.EncodeToString(sum[:])
+		if !strings.Contains(htmlS, `src="/`+name+`"`) || !strings.Contains(htmlS, pin) {
+			t.Fatalf("%s missing SRI pin %s", name, pin)
+		}
+	}
+	assets, err := os.ReadFile("../docs/web-assets.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(assets)
+	for _, name := range []string{"nacl.min.js", "sha256.min.js", "app.js", "app.css", "sw.js"} {
+		raw, err := FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		hexSum := hex.EncodeToString(sum[:])
+		if !strings.Contains(doc, hexSum) {
+			t.Errorf("docs/web-assets.md missing sha256 for %s (%s)", name, hexSum)
+		}
 	}
 }
 

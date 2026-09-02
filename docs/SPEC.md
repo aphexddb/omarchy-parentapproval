@@ -35,6 +35,12 @@ Default public origin: `https://parentapprovals.com`. Configurable via
 `OMARCHY_PARENTAPPROVAL_RELAY` (laptop) and `RELAY_PUBLIC_URL` (relay).
 The relay container does not terminate TLS.
 
+The relay is the phone's code origin and a primary trust root. It cannot
+forge an Ed25519 `allow` with only public keys, but it can serve JavaScript
+that uses the key in IndexedDB. Self-host for high-assurance use.
+See [`trust-model.md`](trust-model.md). Crypto libraries are SRI-pinned;
+asset hashes are in [`web-assets.md`](web-assets.md).
+
 ## Pairing
 
 Opaque token URL: `https://parentapprovals.com/p/<token>`

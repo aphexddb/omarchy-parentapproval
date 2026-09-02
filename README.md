@@ -79,12 +79,21 @@ omarchy plugin add "$PWD/overlay"
 
 ## Relay
 
-Default origin: **https://parentapprovals.com**. Self-hosters set:
+Default origin: **https://parentapprovals.com**. That origin is the phone's
+**code trust root**: it serves the PWA that holds the parent private key.
+A compromised relay can exfiltrate the key or silently sign an allow. The
+cryptographic core still stops a compromised *laptop* and a passive network.
+High-assurance families should self-host. See [`docs/trust-model.md`](docs/trust-model.md).
+
+Self-hosters set:
 
 - Laptop: `OMARCHY_PARENTAPPROVAL_RELAY` or `parentapproval daemon --relay URL`
 - Relay process: `RELAY_PUBLIC_URL` (or `PUBLIC_URL`) and `RELAY_DATA` (default `/data`)
 
 `--relay=off` is local-only HTTP (`--dev`). Production does not open a LAN listen port.
+
+`nacl.min.js` and `sha256.min.js` are Subresource Integrity pinned. Release
+hashes are in [`docs/web-assets.md`](docs/web-assets.md).
 
 See [`deploy/relay/README.md`](deploy/relay/README.md) for Railway and optional Caddy compose. Do not terminate TLS in the relay container.
 
