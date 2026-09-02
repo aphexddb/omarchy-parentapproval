@@ -606,7 +606,7 @@ func cmdPam() error {
 		return fmt.Errorf("parentapproval does not handle login (%s)", service)
 	}
 	cwd := readCwd(os.Getppid())
-	cmd := readCmdline(os.Getppid())
+	cmd := readCmdline(os.Getppid(), cwd)
 	polkit := service == "polkit-1" || service == "polkit"
 	if polkit {
 		if ok, err := daemon.RedeemService(p.socket, userName, "polkit"); err == nil && ok {
@@ -808,31 +808,64 @@ func onInterrupt(fn func()) {
 	}()
 }
 
-func compactCmdline(parts []string) string {
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
+func isLeadingWrapper(p string) bool {
+	switch filepath.Clean(p) {
+	case "sudo", "pkexec", cliName, "omarchy-parentapproval",
+		"/usr/bin/sudo", "/bin/sudo", "/usr/sbin/sudo", "/sbin/sudo",
+		"/usr/bin/pkexec", "/bin/pkexec",
+		"/usr/bin/" + cliName, "/usr/bin/omarchy-parentapproval":
+		return true
+	default:
+		return false
+	}
+}
+
+// compactCmdline strips only a leading sudo/pkexec/parentapproval invocation
+// (and a following "--"). A later argv whose basename is "sudo" is kept so a
+// kid cannot hide the program that will actually run.
+func compactCmdline(parts []string, cwd string) string {
+	i := 0
+	for i < len(parts) {
+		p := parts[i]
+		if p == "" || isLeadingWrapper(p) || p == "--" {
+			i++
+			continue
+		}
+		break
+	}
+	out := make([]string, 0, len(parts)-i)
+	for _, p := range parts[i:] {
 		if p == "" {
 			continue
 		}
-		base := filepath.Base(p)
-		if base == "sudo" || base == "pkexec" || base == cliName || base == "omarchy-parentapproval" {
-			continue
-		}
-		if p == "--" && len(out) == 0 {
-			continue
+		if len(out) == 0 {
+			p = displayProgram(p, cwd)
 		}
 		out = append(out, p)
 	}
 	return strings.Join(out, " ")
 }
 
-func readCmdline(pid int) string {
+func displayProgram(p, cwd string) string {
+	if p == "" || !strings.Contains(p, string(filepath.Separator)) {
+		return p
+	}
+	if !filepath.IsAbs(p) && cwd != "" {
+		p = filepath.Join(cwd, p)
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
+func readCmdline(pid int, cwd string) string {
 	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 	if err != nil {
 		return "(unknown command)"
 	}
 	parts := strings.Split(string(raw), "\x00")
-	if s := compactCmdline(parts); s != "" {
+	if s := compactCmdline(parts, cwd); s != "" {
 		return s
 	}
 	return strings.ReplaceAll(strings.TrimRight(string(raw), "\x00"), "\x00", " ")

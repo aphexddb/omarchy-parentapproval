@@ -137,6 +137,10 @@ Kid login accounts are left in place.
 
 Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`.
 `parentapproval pam` refuses login PAM services (`login`, `sddm`, `gdm`, …).
+The command shown to the parent is the sudo/pkexec argv after only a
+*leading* `sudo`/`pkexec` token (and a following `--`). A later argument
+whose basename is `sudo` is displayed as-is, including a resolved path,
+so a payload named `sudo` cannot hide behind a benign-looking command.
 
 Ad-hoc polkit (pkexec, disks, packagekit — not display-manager or
 `login1.create-session`) uses `/usr/share/polkit-1/rules.d/50-parentapproval.rules`
