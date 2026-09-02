@@ -65,7 +65,7 @@ Optional desktop overlay, so polkit and GUI prompts get the same QR card:
 
 ```bash
 omarchy plugin add "$PWD/overlay"
-# or copy overlay/ to ~/.config/omarchy/plugins/parent.approve/
+# or copy overlay/ to ~/.config/omarchy/plugins/parentapproval/
 ```
 
 `setup-kid` creates the account if it does not exist. That password is for login and the lock screen. It will not sudo. You keep your own account; that is the emergency fallback when the phone is dead. It also links the agent skill into that kid's home so their coding agents load it without a separate `install-skills`.

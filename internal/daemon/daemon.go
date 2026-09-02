@@ -506,6 +506,7 @@ func (d *Daemon) PairStart() (map[string]any, error) {
 		d.pairing.QRURL = url
 	}
 	listen := d.httpAddr
+	d.writePendingLocked()
 	d.mu.Unlock()
 	return map[string]any{
 		"sid":    sid,
@@ -525,6 +526,7 @@ func (d *Daemon) failPairLocked() {
 		close(ch)
 	}
 	d.pairing = nil
+	d.writePendingLocked()
 }
 
 func (d *Daemon) PairStatus(sid string) (map[string]any, error) {
@@ -538,8 +540,12 @@ func (d *Daemon) PairStatus(sid string) (map[string]any, error) {
 		}
 		if p.Done != nil {
 			done := *p.Done
+			out := map[string]any{"state": "done", "pair": done}
+			if p.Pending != nil {
+				out["name"] = p.Pending.Name
+			}
 			d.mu.Unlock()
-			return map[string]any{"state": "done", "pair": done}, nil
+			return out, nil
 		}
 		if p.Pending != nil {
 			name := p.Pending.Name
@@ -593,6 +599,7 @@ func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
 			close(ch)
 		}
 		d.pairing.Waiters = nil
+		d.writePendingLocked()
 	}
 	d.mu.Unlock()
 	go func() {
@@ -601,6 +608,7 @@ func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
 		if d.pairing != nil && d.pairing.SID == sid {
 			d.pairing = nil
 			d.maybeCloseHTTPLocked()
+			d.writePendingLocked()
 		}
 		d.mu.Unlock()
 	}()
@@ -773,25 +781,8 @@ func (d *Daemon) Cancel(rid string) {
 func (d *Daemon) Pending() (map[string]any, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, r := range d.requests {
-		if r.Result == "" && time.Now().Before(r.Exp) {
-			url := r.QRURL
-			if url == "" {
-				url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
-			}
-			matrix, _ := qrdisp.Matrix(url)
-			return map[string]any{
-				"rid":       r.RID,
-				"qr_url":    url,
-				"match":     r.Match,
-				"exp":       r.Exp.Unix(),
-				"user":      r.User,
-				"cmd":       r.Cmd,
-				"service":   r.Service,
-				"host_name": d.HostName(),
-				"matrix":    matrix,
-			}, nil
-		}
+	if m := d.pendingMapLocked(); m != nil {
+		return m, nil
 	}
 	return map[string]any{"rid": ""}, nil
 }
@@ -874,6 +865,14 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/wait") && req.Method == http.MethodGet:
 		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/wait")
 		d.handlePairWait(w, sid)
+		return
+	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/confirm") && req.Method == http.MethodPost:
+		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/confirm")
+		d.handlePairPhoneConfirm(w, req, sid)
+		return
+	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/abort") && req.Method == http.MethodPost:
+		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/abort")
+		d.handlePairPhoneAbort(w, req, sid)
 		return
 	case strings.HasPrefix(path, "/pair/") && req.Method == http.MethodPost:
 		sid := strings.TrimPrefix(path, "/pair/")
@@ -1022,6 +1021,54 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 	writeJSON(w, map[string]any{"ok": true, "result": body.Decision})
 }
 
+func (d *Daemon) handlePairPhoneConfirm(w http.ResponseWriter, req *http.Request, sid string) {
+	var body struct {
+		DeviceID string `json:"device_id"`
+	}
+	_ = json.NewDecoder(io.LimitReader(req.Body, 1<<12)).Decode(&body)
+	d.mu.Lock()
+	p := d.pairing
+	if p == nil || p.SID != sid || p.Pending == nil {
+		d.mu.Unlock()
+		http.Error(w, `{"error":"gone"}`, http.StatusNotFound)
+		return
+	}
+	if body.DeviceID == "" || body.DeviceID != p.Pending.DeviceID {
+		d.mu.Unlock()
+		http.Error(w, `{"error":"device"}`, http.StatusForbidden)
+		return
+	}
+	d.mu.Unlock()
+	done, err := d.PairConfirm(sid)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusConflict)
+		return
+	}
+	writeJSON(w, done)
+}
+
+func (d *Daemon) handlePairPhoneAbort(w http.ResponseWriter, req *http.Request, sid string) {
+	var body struct {
+		DeviceID string `json:"device_id"`
+	}
+	_ = json.NewDecoder(io.LimitReader(req.Body, 1<<12)).Decode(&body)
+	d.mu.Lock()
+	p := d.pairing
+	if p == nil || p.SID != sid {
+		d.mu.Unlock()
+		http.Error(w, `{"error":"gone"}`, http.StatusNotFound)
+		return
+	}
+	if p.Pending != nil && body.DeviceID != "" && body.DeviceID != p.Pending.DeviceID {
+		d.mu.Unlock()
+		http.Error(w, `{"error":"device"}`, http.StatusForbidden)
+		return
+	}
+	d.mu.Unlock()
+	d.PairAbort(sid)
+	writeJSON(w, map[string]any{"ok": true, "state": "aborted"})
+}
+
 func (d *Daemon) handlePairOffer(w http.ResponseWriter, req *http.Request, sid string) {
 	var body protocol.PairOffer
 	if err := json.NewDecoder(io.LimitReader(req.Body, 1<<16)).Decode(&body); err != nil {
@@ -1057,6 +1104,7 @@ func (d *Daemon) handlePairOffer(w http.ResponseWriter, req *http.Request, sid s
 		PubKey:    protocol.B64(pub),
 		CreatedAt: time.Now().UTC(),
 	}
+	d.writePendingLocked()
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]any{"ok": true, "state": "pending_confirm", "sas": d.pairing.SAS})
 }
@@ -1119,8 +1167,7 @@ func (d *Daemon) handlePairWait(w http.ResponseWriter, sid string) {
 	}
 }
 
-func (d *Daemon) writePendingLocked() {
-	path := filepath.Join(d.cfg.StateDir, "pending.json")
+func (d *Daemon) pendingMapLocked() map[string]any {
 	for _, r := range d.requests {
 		if r.Result == "" && time.Now().Before(r.Exp) {
 			url := r.QRURL
@@ -1128,7 +1175,8 @@ func (d *Daemon) writePendingLocked() {
 				url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
 			}
 			matrix, _ := qrdisp.Matrix(url)
-			payload, _ := json.MarshalIndent(map[string]any{
+			return map[string]any{
+				"kind":      "ask",
 				"rid":       r.RID,
 				"qr_url":    url,
 				"match":     r.Match,
@@ -1138,12 +1186,39 @@ func (d *Daemon) writePendingLocked() {
 				"service":   r.Service,
 				"host_name": d.HostName(),
 				"matrix":    matrix,
-			}, "", "  ")
-			_ = os.WriteFile(path, payload, 0o644)
-			return
+			}
 		}
 	}
-	_ = os.Remove(path)
+	p := d.pairing
+	if p != nil && p.Done == nil && time.Now().Before(p.Exp) {
+		url := p.QRURL
+		matrix, _ := qrdisp.Matrix(url)
+		out := map[string]any{
+			"kind":   "pair",
+			"sid":    p.SID,
+			"match":  p.SAS,
+			"qr_url": url,
+			"exp":    p.Exp.Unix(),
+			"state":  pairState(p),
+			"matrix": matrix,
+		}
+		if p.Pending != nil {
+			out["name"] = p.Pending.Name
+		}
+		return out
+	}
+	return nil
+}
+
+func (d *Daemon) writePendingLocked() {
+	path := filepath.Join(d.cfg.StateDir, "pending.json")
+	m := d.pendingMapLocked()
+	if m == nil {
+		_ = os.Remove(path)
+		return
+	}
+	payload, _ := json.MarshalIndent(m, "", "  ")
+	_ = os.WriteFile(path, payload, 0o644)
 }
 
 func (d *Daemon) clearPending() {

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "parent.approve",
+  "id": "parentapproval",
   "name": "Parent Approve",
   "version": "0.1.0",
   "author": "parentapproval",
@@ -8,7 +8,7 @@
   "homepage": "https://github.com/aphexddb/omarchy-parentapproval",
   "license": "MIT",
   "kinds": ["overlay"],
-  "keepLoaded": true,
+  "keepLoaded": false,
   "entryPoints": {
     "overlay": "Panel.qml"
   }

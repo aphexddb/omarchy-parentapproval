@@ -2,6 +2,7 @@
 package relay
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -144,6 +145,16 @@ func (s *Server) SetPublicURL(u string) {
 
 func (s *Server) VAPIDPublic() string { return s.vapid.PublicKey }
 
+func (s *Server) vapidSubscriber() string {
+	s.mu.Lock()
+	u := s.cfg.PublicURL
+	s.mu.Unlock()
+	if strings.HasPrefix(u, "https://") {
+		return u
+	}
+	return "https://parentapprovals.com"
+}
+
 func (s *Server) ListenAndServe(addr string) error {
 	srv := &http.Server{
 		Addr:              addr,
@@ -174,6 +185,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeWeb(w, "index.html")
 	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/wait") && r.Method == http.MethodGet:
 		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/wait")
+		s.proxyBySID(w, r, sid)
+	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/confirm") && r.Method == http.MethodPost:
+		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/confirm")
+		s.proxyBySID(w, r, sid)
+	case strings.HasPrefix(path, "/pair/") && strings.HasSuffix(path, "/abort") && r.Method == http.MethodPost:
+		sid := strings.TrimSuffix(strings.TrimPrefix(path, "/pair/"), "/abort")
 		s.proxyBySID(w, r, sid)
 	case strings.HasPrefix(path, "/pair/") && (r.Method == http.MethodPost || r.Method == http.MethodGet):
 		sid := strings.TrimPrefix(path, "/pair/")
@@ -541,7 +558,9 @@ func (s *Server) handleNotify(m msg) {
 
 func (s *Server) pushOne(hostID string, sub pushSub, payload []byte) {
 	resp, err := webpush.SendNotification(payload, &sub.Subscription, &webpush.Options{
-		Subscriber:      "mailto:admin@parentapprovals.com",
+		// webpush-go prefixes mailto: unless the subscriber is already https:.
+		// Apple rejects JWT sub "mailto:mailto:..." with 403.
+		Subscriber:      s.vapidSubscriber(),
 		VAPIDPublicKey:  s.vapid.PublicKey,
 		VAPIDPrivateKey: s.vapid.PrivateKey,
 		TTL:             120,
@@ -555,7 +574,8 @@ func (s *Server) pushOne(hostID string, sub pushSub, payload []byte) {
 	if resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusNotFound {
 		s.dropSub(hostID, sub.DeviceID)
 	} else if resp.StatusCode >= 400 {
-		log.Printf("relay push %s/%s: HTTP %s", hostID, sub.DeviceID, resp.Status)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Printf("relay push %s/%s: HTTP %s %s", hostID, sub.DeviceID, resp.Status, bytes.TrimSpace(body))
 	}
 }
 

@@ -377,8 +377,6 @@ async function boot() {
       }
       const m = await meta.json();
       if (m.kind === "pair" && m.sid) {
-        const recs = await hydrateRecords();
-        if (recs.length) return resumePaired();
         return bootPair(m.sid);
       }
       if (m.kind === "ask" && m.rid) return bootApprove(m.rid);
@@ -396,9 +394,99 @@ async function boot() {
   await resumePaired();
 }
 
+async function offerPair(sid, deviceId, name, pubkeyB64) {
+  const res = await fetch("/pair/" + sid, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      v: 1,
+      device_id: deviceId,
+      name,
+      alg: "Ed25519",
+      pubkey: pubkeyB64,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function waitForPair(sid, deviceId) {
+  const confirmBtn = $("pair-confirm-btn");
+  const abortBtn = $("pair-abort-btn");
+  const errEl = $("pair-wait-err");
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.onclick = async () => {
+      confirmBtn.disabled = true;
+      if (abortBtn) abortBtn.disabled = true;
+      try {
+        const res = await fetch("/pair/" + sid + "/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ device_id: deviceId }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+      } catch (err) {
+        if (errEl) banner(errEl, "err", err.message || String(err));
+        confirmBtn.disabled = false;
+        if (abortBtn) abortBtn.disabled = false;
+      }
+    };
+  }
+  if (abortBtn) {
+    abortBtn.disabled = false;
+    abortBtn.onclick = async () => {
+      abortBtn.disabled = true;
+      if (confirmBtn) confirmBtn.disabled = true;
+      try {
+        await fetch("/pair/" + sid + "/abort", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ device_id: deviceId }),
+        });
+      } catch (e) {
+        /* wait will fail */
+      }
+    };
+  }
+  const wait = await fetch("/pair/" + sid + "/wait");
+  if (!wait.ok) throw new Error("Pairing was not confirmed.");
+  return wait.json();
+}
+
+async function finishPair(sid, rec) {
+  settleHomeURL();
+  $("paired-host").textContent = rec.host_name;
+  if (isStandalone()) {
+    showNotifySetup([rec]);
+  } else if (pushNeedsStandalone()) {
+    wireA2HS([rec]);
+  } else {
+    show("pair-done");
+    wireNotifyButton($("notify-btn"), rec.host_id, rec.device_id, $("notify-msg"));
+  }
+}
+
 async function bootPair(sid) {
   show("pair");
   $("device-name").value = deviceNameGuess();
+  const existing = (await hydrateRecords().catch(() => []))[0];
+  if (existing && existing.secret) {
+    try {
+      const kp = nacl.sign.keyPair.fromSecretKey(b64urlToBytes(existing.secret));
+      const offered = await offerPair(sid, existing.device_id, deviceNameGuess(), b64url(kp.publicKey));
+      $("sas").textContent = (offered.sas || "").split("").join(" ");
+      show("pair-wait");
+      const done = await waitForPair(sid, existing.device_id);
+      existing.host_id = done.host_id;
+      existing.host_name = done.host_name;
+      existing.device_id = done.device_id;
+      await saveRecord(done.host_id, existing);
+      return finishPair(sid, existing);
+    } catch (e) {
+      /* fall through to the pair form */
+    }
+  }
   $("pair-form").onsubmit = async (e) => {
     e.preventDefault();
     $("pair-btn").disabled = true;
@@ -408,53 +496,18 @@ async function bootPair(sid) {
       const secretB64 = b64url(pairKey.secretKey);
       const deviceId = newDeviceId();
       const name = $("device-name").value.trim() || deviceNameGuess();
-      const res = await fetch("/pair/" + sid, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          v: 1,
-          device_id: deviceId,
-          name,
-          alg: "Ed25519",
-          pubkey: b64url(rawPub),
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const offered = await res.json();
+      const offered = await offerPair(sid, deviceId, name, b64url(rawPub));
       $("sas").textContent = (offered.sas || "").split("").join(" ");
       show("pair-wait");
-      const wait = await fetch("/pair/" + sid + "/wait");
-      if (!wait.ok) throw new Error("Pairing was not confirmed on the laptop.");
-      const done = await wait.json();
-      await saveRecord(done.host_id, {
+      const done = await waitForPair(sid, deviceId);
+      const rec = {
         host_id: done.host_id,
         host_name: done.host_name,
         device_id: done.device_id,
         secret: secretB64,
-      });
-      settleHomeURL();
-      $("paired-host").textContent = done.host_name;
-      if (isStandalone()) {
-        showNotifySetup([
-          {
-            host_id: done.host_id,
-            host_name: done.host_name,
-            device_id: done.device_id,
-          },
-        ]);
-      } else if (pushNeedsStandalone()) {
-        wireA2HS([
-          {
-            host_id: done.host_id,
-            host_name: done.host_name,
-            device_id: done.device_id,
-            secret: secretB64,
-          },
-        ]);
-      } else {
-        show("pair-done");
-        wireNotifyButton($("notify-btn"), done.host_id, done.device_id, $("notify-msg"));
-      }
+      };
+      await saveRecord(done.host_id, rec);
+      return finishPair(sid, rec);
     } catch (err) {
       banner($("pair-err"), "err", err.message || String(err));
       $("pair-btn").disabled = false;

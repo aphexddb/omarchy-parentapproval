@@ -75,6 +75,34 @@ func TestOverlayPayloadPairKind(t *testing.T) {
 	}
 }
 
+func TestPresentDisplayPairSkipsNotification(t *testing.T) {
+	restoreDisplayHooks(t)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	var started []string
+	binExists = func(path string) bool {
+		return path == "/usr/bin/omarchy-shell" || path == "/usr/bin/omarchy-notification-send"
+	}
+	execCommandContext = func(ctx context.Context, name string, args ...string) error {
+		started = append(started, name)
+		return nil
+	}
+	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
+		started = append(started, name+" "+strings.Join(args, " "))
+		return "ok\n", nil
+	}
+	presentDisplay(map[string]any{
+		"kind": "pair", "cmd": "Pair a parent phone", "match": "424242",
+		"qr_url": "https://parentapprovals.com/p/abc",
+	})
+	joined := strings.Join(started, "\n")
+	if strings.Contains(joined, "omarchy-notification-send") {
+		t.Fatalf("pair should not send a desktop notification: %q", joined)
+	}
+	if !strings.Contains(joined, "summon parentapproval") {
+		t.Fatalf("started %q", joined)
+	}
+}
+
 func TestPresentDisplayPrefersOverlay(t *testing.T) {
 	restoreDisplayHooks(t)
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -101,7 +129,7 @@ func TestPresentDisplayPrefersOverlay(t *testing.T) {
 		"qr_url": "https://parentapprovals.com/p/abc",
 	})
 	joined := strings.Join(started, "\n")
-	if !strings.Contains(joined, "summon parent.approve") {
+	if !strings.Contains(joined, "summon parentapproval") {
 		t.Fatalf("started %q", joined)
 	}
 }
@@ -141,7 +169,7 @@ func TestDismissDisplayHidesOverlay(t *testing.T) {
 		return "ok\n", nil
 	}
 	dismissDisplay()
-	if len(args) < 3 || args[1] != "hide" || args[2] != "parent.approve" {
+	if len(args) < 3 || args[1] != "hide" || args[2] != "parentapproval" {
 		t.Fatalf("hide args %v", args)
 	}
 }
@@ -172,7 +200,13 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		"function applyPayload",
 		"root.match = String(payload.match)",
 		`root.kind === "pair"`,
+		`data.kind === "pair"`,
+		`"parentapproval"`,
 		`command: ["/usr/bin/parentapproval", "pending", "--json"]`,
+		"pair-confirm",
+		"pair-abort",
+		"function confirmPair",
+		"text: \"Confirm\"",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Panel.qml missing %q", want)

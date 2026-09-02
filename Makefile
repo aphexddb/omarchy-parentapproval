@@ -48,7 +48,7 @@ install: check-root-install build
 	install -Dm644 default/agents/skills/parentapproval/SKILL.md "$(DESTDIR)$(PREFIX)/share/parentapproval/agents/skills/parentapproval/SKILL.md"
 	install -Dm644 VERSION "$(DESTDIR)$(PREFIX)/share/parentapproval/VERSION"
 	install -d "$(DESTDIR)$(PREFIX)/share/parentapproval/overlay"
-	install -Dm644 overlay/manifest.json overlay/Panel.qml overlay/qmldir -t "$(DESTDIR)$(PREFIX)/share/parentapproval/overlay"
+	install -Dm644 overlay/manifest.json overlay/Panel.qml -t "$(DESTDIR)$(PREFIX)/share/parentapproval/overlay"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/omarchy-parentapproval"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/doc/omarchy-parentapproval"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/licenses/omarchy-parentapproval"

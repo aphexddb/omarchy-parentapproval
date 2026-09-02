@@ -18,13 +18,20 @@ else
   makepkg -fsi --noconfirm
 fi
 
-plugin_dst=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve
+plugin_dst=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parentapproval
 mkdir -p "$plugin_dst"
-install -m644 overlay/manifest.json overlay/Panel.qml overlay/qmldir "$plugin_dst/"
+install -m644 overlay/manifest.json overlay/Panel.qml "$plugin_dst/"
+rm -f "$plugin_dst/qmldir"
+# QML treats parent.approve as parent.approve property access; that id never maps a layer.
+old_plugin=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/parent.approve
+if command -v omarchy >/dev/null; then
+  omarchy plugin disable parent.approve >/dev/null 2>&1 || true
+fi
+rm -rf "$old_plugin" "$old_plugin.bak"
 
 if command -v omarchy-shell >/dev/null && command -v omarchy >/dev/null; then
   omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
-  omarchy plugin enable parent.approve >/dev/null 2>&1 || true
+  omarchy plugin enable parentapproval >/dev/null 2>&1 || true
 fi
 
 echo

@@ -291,6 +291,17 @@ func TestOneLivePairPerHost(t *testing.T) {
 	}
 }
 
+func TestVAPIDSubscriberIsHTTPS(t *testing.T) {
+	s, _ := newTestRelay(t)
+	sub := s.vapidSubscriber()
+	if !strings.HasPrefix(sub, "https://") {
+		t.Fatalf("subscriber %q", sub)
+	}
+	if strings.Contains(sub, "mailto:") {
+		t.Fatalf("webpush-go would double-prefix mailto: got %q", sub)
+	}
+}
+
 func TestManifestAndSW(t *testing.T) {
 	_, ts := newTestRelay(t)
 	res, err := http.Get(ts.URL + "/manifest.webmanifest")

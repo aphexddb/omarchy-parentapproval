@@ -47,10 +47,15 @@
     </section>
 
     <section id="pair-wait" class="hidden">
-      <div class="eyebrow">Confirm on the laptop</div>
+      <div class="eyebrow">Confirm on this phone</div>
       <h1>Same code?</h1>
-      <p class="lead">The laptop should be showing this number. If it isn’t, cancel — someone else is pairing.</p>
+      <p class="lead">Does this match the laptop? If it does, tap Confirm. If it does not, tap Abort.</p>
       <div class="card"><div class="sas" id="sas"></div></div>
+      <div id="pair-wait-err"></div>
+      <div class="row">
+        <button class="deny" id="pair-abort-btn" type="button">Abort</button>
+        <button class="approve" id="pair-confirm-btn" type="button">Confirm</button>
+      </div>
     </section>
 
     <section id="pair-done" class="hidden">
@@ -115,6 +120,6 @@
   </main>
   <script src="/nacl.min.js"></script>
   <script src="/sha256.min.js"></script>
-  <script src="/app.js?v=22"></script>
+  <script src="/app.js?v=28"></script>
 </body>
 </html>

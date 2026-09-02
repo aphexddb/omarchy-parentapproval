@@ -257,11 +257,87 @@ func TestPairConfirm(t *testing.T) {
 	if st["state"] != "pending_confirm" {
 		t.Fatalf("state %+v", st)
 	}
+	pend, err := Pending(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pend["kind"] != "pair" || pend["state"] != "pending_confirm" {
+		t.Fatalf("pending after offer %+v", pend)
+	}
 	if _, err := PairConfirm(sock, sid); err != nil {
 		t.Fatal(err)
 	}
 	if d.Store().ParentCount() != 1 {
 		t.Fatal("parent not stored")
+	}
+}
+
+func TestPairConfirmFromPhone(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	url := started["qr_url"].(string)
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := protocol.PairOffer{V: 1, DeviceID: "phone-2", Name: "Dad iPhone", Alg: "Ed25519", PubKey: protocol.B64(pub)}
+	raw, _ := json.Marshal(offer)
+	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != http.StatusAccepted {
+		t.Fatalf("offer %s", post.Status)
+	}
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-2"})
+	conf, err := http.Post(url+"/confirm", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conf.Body.Close()
+	if conf.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(conf.Body)
+		t.Fatalf("confirm %s %s", conf.Status, b)
+	}
+	if d.Store().ParentCount() != 1 {
+		t.Fatal("parent not stored")
+	}
+	st, err := PairStatus(sock, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["state"] != "done" {
+		t.Fatalf("state %+v", st)
+	}
+}
+
+func TestPendingDuringPair(t *testing.T) {
+	_, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := Pending(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["kind"] != "pair" {
+		t.Fatalf("pending %+v", st)
+	}
+	if st["match"] != started["sas"] {
+		t.Fatalf("match %v want %v", st["match"], started["sas"])
+	}
+	if st["sid"] != started["sid"] {
+		t.Fatalf("sid %v", st["sid"])
+	}
+	matrix, _ := st["matrix"].([]any)
+	if len(matrix) < 21 {
+		t.Fatalf("pair QR matrix %+v", st["matrix"])
 	}
 }
 

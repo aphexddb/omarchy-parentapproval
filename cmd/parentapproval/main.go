@@ -42,6 +42,10 @@ func main() {
 		err = cmdDaemon(os.Args[2:])
 	case "pair":
 		err = cmdPair(os.Args[2:])
+	case "pair-confirm":
+		err = cmdPairConfirm(os.Args[2:])
+	case "pair-abort":
+		err = cmdPairAbort(os.Args[2:])
 	case "ask":
 		err = cmdAsk(os.Args[2:])
 	case "pam":
@@ -268,7 +272,7 @@ func cmdPair(args []string) error {
 		return err
 	}
 	fmt.Println(box)
-	presentDisplay(map[string]any{
+	overlayOK := presentDisplay(map[string]any{
 		"kind":   "pair",
 		"user":   "",
 		"cmd":    "Pair a parent phone",
@@ -290,6 +294,7 @@ func cmdPair(args []string) error {
 		_, _ = daemon.PairAbort(p.socket, sid)
 	})
 
+	prompted := false
 	for {
 		st, err := daemon.PairStatus(p.socket, sid)
 		if err != nil {
@@ -298,27 +303,103 @@ func cmdPair(args []string) error {
 		switch st["state"] {
 		case "pending_confirm":
 			name, _ := st["name"].(string)
+			if overlayOK {
+				if !prompted {
+					fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
+					fmt.Printf("Does the overlay show the same code  %s  ? Press Y to confirm, N to abort.\n", spaced(sas))
+					prompted = true
+				}
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
 			fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
 			fmt.Printf("Does the phone show the same code  %s  ?\n", spaced(sas))
 			if !confirm("Confirm this phone as a parent") {
 				_, _ = daemon.PairAbort(p.socket, sid)
 				return fmt.Errorf("aborted")
 			}
-			done, err := daemon.PairConfirm(p.socket, sid)
-			if err != nil {
+			if _, err := daemon.PairConfirm(p.socket, sid); err != nil {
 				return err
 			}
 			fmt.Printf("Paired %q.\n", name)
 			fmt.Println("On the phone: leave Safari, open the Home Screen icon, tap Allow notifications.")
-			_ = done
 			return nil
 		case "done":
-			fmt.Println("Already confirmed.")
+			name, _ := st["name"].(string)
+			if name == "" {
+				if pair, ok := st["pair"].(map[string]any); ok {
+					name, _ = pair["name"].(string)
+				}
+			}
+			if name == "" {
+				fmt.Println("Paired.")
+			} else {
+				fmt.Printf("Paired %q.\n", name)
+			}
+			fmt.Println("On the phone: leave Safari, open the Home Screen icon, tap Allow notifications.")
 			return nil
 		case "timeout", "none":
+			if prompted {
+				return fmt.Errorf("pairing aborted")
+			}
 			return fmt.Errorf("pairing timed out")
 		}
 	}
+}
+
+func cmdPairConfirm(args []string) error {
+	p := resolvePaths(args)
+	if err := ensureDaemon(p.socket); err != nil {
+		return err
+	}
+	sid := pairSIDArg(args)
+	if sid == "" {
+		st, err := daemon.Pending(p.socket)
+		if err != nil {
+			return err
+		}
+		sid, _ = st["sid"].(string)
+	}
+	if sid == "" {
+		return fmt.Errorf("no pairing session")
+	}
+	done, err := daemon.PairConfirm(p.socket, sid)
+	if err != nil {
+		return err
+	}
+	name, _ := done["name"].(string)
+	if name != "" {
+		fmt.Printf("Paired %q.\n", name)
+	} else {
+		fmt.Println("Paired.")
+	}
+	return nil
+}
+
+func cmdPairAbort(args []string) error {
+	p := resolvePaths(args)
+	if err := ensureDaemon(p.socket); err != nil {
+		return err
+	}
+	sid := pairSIDArg(args)
+	if sid == "" {
+		st, err := daemon.Pending(p.socket)
+		if err == nil {
+			sid, _ = st["sid"].(string)
+		}
+	}
+	_, err := daemon.PairAbort(p.socket, sid)
+	return err
+}
+
+func pairSIDArg(args []string) string {
+	for _, a := range args {
+		if a == "--dev" || strings.HasPrefix(a, "--") {
+			continue
+		}
+		return a
+	}
+	return ""
 }
 
 func cmdAsk(args []string) error {
@@ -609,23 +690,22 @@ func overlayPayload(created map[string]any) (string, error) {
 	return string(b), nil
 }
 
-func presentDisplay(created map[string]any) {
+func presentDisplay(created map[string]any) bool {
 	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
-		return
+		return false
 	}
-	if binExists("/usr/bin/omarchy-notification-send") {
-		kind, _ := created["kind"].(string)
-		title, body := "Waiting for a parent", fmt.Sprintf("%s wants to run %s", created["user"], created["cmd"])
-		if kind == "pair" {
-			title, body = "Scan to pair", "Parent phone only — not the kid's."
-		}
-		_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰐲", title, body)
+	kind, _ := created["kind"].(string)
+	if kind != "pair" && binExists("/usr/bin/omarchy-notification-send") {
+		_ = execCommand("omarchy-notification-send", "-u", "critical", "-g", "󰐲",
+			"Waiting for a parent",
+			fmt.Sprintf("%s wants to run %s", created["user"], created["cmd"]))
 	}
 	if summonOverlay(created) {
-		return
+		return true
 	}
 	url, _ := created["qr_url"].(string)
 	showPNG(url)
+	return false
 }
 
 func summonOverlay(created map[string]any) bool {
@@ -638,7 +718,7 @@ func summonOverlay(created map[string]any) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := execCommandOutput(ctx, "omarchy-shell", "shell", "summon", "parent.approve", payload)
+	out, err := execCommandOutput(ctx, "omarchy-shell", "shell", "summon", "parentapproval", payload)
 	return err == nil && strings.TrimSpace(out) == "ok"
 }
 
@@ -678,7 +758,7 @@ func showPNG(url string) {
 func dismissDisplay() {
 	if binExists("/usr/bin/omarchy-shell") {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, _ = execCommandOutput(ctx, "omarchy-shell", "shell", "hide", "parent.approve")
+		_, _ = execCommandOutput(ctx, "omarchy-shell", "shell", "hide", "parentapproval")
 		cancel()
 	}
 	displayMu.Lock()

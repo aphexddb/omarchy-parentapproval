@@ -16,6 +16,10 @@ Item {
   property string user: ""
   property string cmd: ""
   property string match: ""
+  property string sid: ""
+  property string pairState: ""
+  property string pairName: ""
+  property bool pairBusy: false
   property var qrRows: []
   property int qrSize: 0
   property string error: ""
@@ -41,12 +45,8 @@ Item {
   function open(payloadJson) {
     applyPayload(payloadJson)
     root.opened = true
-    if (root.pairing) {
-      poll.running = false
-    } else {
-      refresh()
-      poll.running = true
-    }
+    refresh()
+    poll.running = true
     Qt.callLater(function() {
       if (root.opened) keyCatcher.forceActiveFocus()
     })
@@ -61,13 +61,35 @@ Item {
     root.user = ""
     root.cmd = ""
     root.kind = "ask"
+    root.sid = ""
+    root.pairState = ""
+    root.pairName = ""
+    root.pairBusy = false
     root.error = ""
   }
 
   function dismiss() {
     if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "parent.approve")
+      root.shell.hide((root.manifest && root.manifest.id) || "parentapproval")
     else close()
+  }
+
+  function confirmPair() {
+    if (root.pairBusy || root.pairState !== "pending_confirm") return
+    root.pairBusy = true
+    confirmProc.command = root.sid
+      ? ["/usr/bin/parentapproval", "pair-confirm", root.sid]
+      : ["/usr/bin/parentapproval", "pair-confirm"]
+    confirmProc.running = true
+  }
+
+  function abortPair() {
+    if (root.pairBusy) return
+    root.pairBusy = true
+    abortProc.command = root.sid
+      ? ["/usr/bin/parentapproval", "pair-abort", root.sid]
+      : ["/usr/bin/parentapproval", "pair-abort"]
+    abortProc.running = true
   }
 
   function refresh() {
@@ -92,11 +114,26 @@ Item {
         if (!text) return
         try {
           var data = JSON.parse(text)
-          if (root.pairing) return
+          if (data.kind === "pair" || data.sid) {
+            root.kind = "pair"
+            root.sid = data.sid || ""
+            root.pairState = data.state || "waiting"
+            root.pairName = data.name || ""
+            root.match = data.match || ""
+            root.qrRows = data.matrix || []
+            root.qrSize = root.qrRows.length
+            root.error = ""
+            return
+          }
           if (!data.rid) {
+            if (root.kind === "pair") {
+              if (root.pairState === "pending_confirm") root.dismiss()
+              return
+            }
             if (root.opened) root.dismiss()
             return
           }
+          root.kind = "ask"
           root.user = data.user || ""
           root.cmd = data.cmd || ""
           root.match = data.match || ""
@@ -107,6 +144,23 @@ Item {
           root.error = "Could not read the pending request"
         }
       }
+    }
+  }
+
+  Process {
+    id: confirmProc
+    onExited: function(code) {
+      root.pairBusy = false
+      if (code === 0) root.dismiss()
+      else root.error = "Could not confirm this phone"
+    }
+  }
+
+  Process {
+    id: abortProc
+    onExited: function() {
+      root.pairBusy = false
+      root.dismiss()
     }
   }
 
@@ -125,6 +179,18 @@ Item {
       anchors.fill: parent
       focus: true
       Keys.onPressed: function(event) {
+        if (root.pairing && root.pairState === "pending_confirm" && !root.pairBusy) {
+          if (event.key === Qt.Key_Y || event.key === Qt.Key_Return) {
+            root.confirmPair()
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) {
+            root.abortPair()
+            event.accepted = true
+            return
+          }
+        }
         if (event.key === Qt.Key_Escape) root.dismiss()
       }
     }
@@ -132,7 +198,7 @@ Item {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(0, 0, 0, 0.78)
-      MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+      MouseArea { anchors.fill: parent; onClicked: if (!root.pairing) root.dismiss() }
     }
 
     ColumnLayout {
@@ -141,7 +207,9 @@ Item {
       width: Style.space(320)
 
       Text {
-        text: root.pairing ? "SCAN TO PAIR" : ((root.user || "Kid").toUpperCase() + " WANTS TO RUN")
+        text: root.pairing
+          ? (root.pairState === "pending_confirm" ? "SAME CODE?" : "SCAN TO PAIR")
+          : ((root.user || "Kid").toUpperCase() + " WANTS TO RUN")
         color: root.onScrimDim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -151,7 +219,11 @@ Item {
       }
 
       Text {
-        text: root.pairing ? "Parent phone only — not the kid's." : root.cmd
+        text: root.pairing
+          ? (root.pairState === "pending_confirm"
+              ? ((root.pairName || "Phone") + " wants to parent this machine.")
+              : "Parent phone only — not the kid's.")
+          : root.cmd
         color: root.onScrim
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -198,7 +270,9 @@ Item {
 
       Text {
         text: root.pairing
-          ? "The phone must show the same code. This is not a password."
+          ? (root.pairState === "pending_confirm"
+              ? "If the phone shows this code, confirm. This is not a password."
+              : "The phone must show the same code. This is not a password.")
           : "Approve on a paired parent phone. This is not a password."
         color: root.onScrimDim
         font.family: root.fontFamily
@@ -206,6 +280,57 @@ Item {
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
         Layout.fillWidth: true
+      }
+
+      RowLayout {
+        visible: root.pairing && root.pairState === "pending_confirm"
+        Layout.alignment: Qt.AlignHCenter
+        Layout.fillWidth: true
+        spacing: Style.space(12)
+
+        Rectangle {
+          Layout.fillWidth: true
+          height: Style.space(48)
+          radius: Style.cornerRadius
+          color: "transparent"
+          border.color: root.onScrimDim
+          border.width: 1
+          opacity: root.pairBusy ? 0.45 : 1
+          MouseArea {
+            anchors.fill: parent
+            enabled: !root.pairBusy
+            onClicked: root.abortPair()
+          }
+          Text {
+            anchors.centerIn: parent
+            text: "Abort"
+            color: root.onScrim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+        }
+
+        Rectangle {
+          Layout.fillWidth: true
+          height: Style.space(48)
+          radius: Style.cornerRadius
+          color: "#3dd68c"
+          opacity: root.pairBusy ? 0.45 : 1
+          MouseArea {
+            anchors.fill: parent
+            enabled: !root.pairBusy
+            onClicked: root.confirmPair()
+          }
+          Text {
+            anchors.centerIn: parent
+            text: "Confirm"
+            color: "#062016"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+        }
       }
     }
   }
