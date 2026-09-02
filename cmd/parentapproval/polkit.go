@@ -178,7 +178,7 @@ func (a *polkitAgent) BeginAuthentication(actionID, message, iconName string, de
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- presentAndWait(p.socket, created, waitUI{printQR: true, liveTimer: true})
+		done <- waitForParent(p.socket, created)
 	}()
 	select {
 	case <-cancel:

@@ -351,6 +351,8 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		"id: verdictBadge",
 		"id: verdictAnim",
 		`root.verdict === "allow" ? "✓" : "✕"`,
+		`data.service === "polkit"`,
+		`data.service === "polkit-1"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Panel.qml missing %q", want)

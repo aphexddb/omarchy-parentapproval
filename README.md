@@ -29,7 +29,7 @@ parentapproval ask -c "sudo id"
 
 1. **You pair once**, sitting at the laptop. Run `sudo parentapproval pair` and scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. The 6-digit code is derived from that key — a swapped key changes the digits. Confirm the code on the phone (or type those digits on the laptop overlay). The offering phone's name is shown so you can see whose key you are about to enroll.    
 2. **Add the page to Home Screen, tap Allow notifications.** the pair command waits until notifications are on, then exits. After that the phone is a now a parent for this machine.
-3. **The kid hits sudo** (or a polkit prompt: pkexec, disks, package installs). They are in the `omarchy-kids` group, so PAM does not accept their login password. Login itself never phones a parent. The laptop asks the relay to notify paired phones.
+3. **The kid hits sudo** (or a polkit prompt: pkexec, disks, package installs). They are in the `omarchy-kids` group, so PAM does not accept their login password. Login itself never phones a parent. The laptop asks the relay to notify paired phones. A polkit prompt stays bone stock — no parentapproval QR on that dialog. The QR card is for sudo TTY, `ask`, and pairing only.
 4. **Your phone buzzes.** Check the command and the match code, tap Approve. The phone signs the request based on the private key only the phone has, the computer verifies against the enrolled public key.
 
 Why this method vs TOTP? a kid who photographs an enrollment QR would own sudo forever. There are no inbound firewall holes, phones speak HTTPS to the relay, and computer dials outbound WSS. **The approval path is only for `omarchy-kids`.**
