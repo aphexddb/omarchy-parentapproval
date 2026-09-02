@@ -140,6 +140,9 @@ func TestApproveAndReplay(t *testing.T) {
 	if body.User != callerUser(t) || body.Cmd != "pacman -S steam" {
 		t.Fatalf("request %+v", body)
 	}
+	if body.HostName == "" || body.HostName != d.HostName() {
+		t.Fatalf("ask host_name %q want %q", body.HostName, d.HostName())
+	}
 	hash := protocol.B64(protocol.CmdHash(body.User, body.Service, body.CWD, body.Cmd))
 	if hash != body.CmdHash {
 		t.Fatal("cmd_hash mismatch")
