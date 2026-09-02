@@ -69,3 +69,26 @@ func TestVerifyRejectsShortKey(t *testing.T) {
 		t.Fatal("short pubkey accepted")
 	}
 }
+
+func TestStripLeadingSudo(t *testing.T) {
+	cases := map[string]string{
+		"sudo echo 'LLLOOLLL'":     "echo 'LLLOOLLL'",
+		"sudo -- pacman -S cowsay": "pacman -S cowsay",
+		"pacman -S cowsay":         "pacman -S cowsay",
+		"/usr/bin/sudo echo hi":    "echo hi",
+		"pkexec true":              "true",
+	}
+	for in, want := range cases {
+		if got := StripLeadingSudo(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestSudoShellKey(t *testing.T) {
+	got := SudoShellKey("sudo echo 'LLLOOLLL'")
+	want := "sh -c echo 'LLLOOLLL'"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

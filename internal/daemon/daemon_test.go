@@ -384,6 +384,78 @@ func TestPendingShowsAskVerdict(t *testing.T) {
 	}
 }
 
+func TestRedeemAfterAllow(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+
+	created, err := Create(sock, "milo", "sudo", "/", "sudo echo 'LLLOOLLL'", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, _ := created["qr_url"].(string)
+	raw, _ := json.Marshal(protocol.Decision{V: 1, DeviceID: "x", Decision: "deny"})
+	post, err := http.Post(url+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("deny %s", post.Status)
+	}
+	ok, err := Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("deny must not mint a sudo grant")
+	}
+
+	created, err = Create(sock, "milo", "sudo", "/", "sudo echo 'LLLOOLLL'", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, _ = created["qr_url"].(string)
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body protocol.Request
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		res.Body.Close()
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
+	sig := protocol.Sign(priv, canon)
+	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
+	raw, _ = json.Marshal(dec)
+	post, err = http.Post(url+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(post.Body)
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("allow %s %s", post.Status, b)
+	}
+	ok, err = Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("allow should mint a one-shot sudo grant")
+	}
+	ok, err = Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("grant must be single-use")
+	}
+}
+
 func TestListenSpec(t *testing.T) {
 	cases := []struct {
 		in, network, addr string

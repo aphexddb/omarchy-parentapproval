@@ -81,6 +81,10 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
@@ -89,7 +93,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage: parentapproval <command> [args]
 
 Commands:
-  ask --cmd CMD                 test an approval request (does not run CMD)
+  ask --cmd CMD                 ask a parent, then run CMD with sudo
   pair                          pair a parent phone
   status                        show daemon and paired phones
   pending [--json]              list pending requests
@@ -434,7 +438,10 @@ func cmdAsk(args []string) error {
 	if err != nil {
 		return err
 	}
-	return presentAndWait(p.socket, created)
+	if err := presentAndWait(p.socket, created); err != nil {
+		return err
+	}
+	return runApproved(cmd)
 }
 
 func cmdPam() error {
@@ -451,6 +458,9 @@ func cmdPam() error {
 	}
 	cwd := readCwd(os.Getppid())
 	cmd := readCmdline(os.Getppid())
+	if ok, err := daemon.Redeem(p.socket, userName, cmd); err == nil && ok {
+		return nil
+	}
 	created, err := daemon.Create(p.socket, userName, service, cwd, cmd, protocol.DefaultAskTTL)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -644,12 +654,7 @@ func onInterrupt(fn func()) {
 	}()
 }
 
-func readCmdline(pid int) string {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return "(unknown command)"
-	}
-	parts := strings.Split(string(raw), "\x00")
+func compactCmdline(parts []string) string {
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if p == "" {
@@ -659,12 +664,38 @@ func readCmdline(pid int) string {
 		if base == "sudo" || base == "pkexec" || base == cliName || base == "omarchy-parentapproval" {
 			continue
 		}
+		if p == "--" && len(out) == 0 {
+			continue
+		}
 		out = append(out, p)
 	}
-	if len(out) == 0 {
-		return strings.ReplaceAll(strings.TrimRight(string(raw), "\x00"), "\x00", " ")
-	}
 	return strings.Join(out, " ")
+}
+
+func readCmdline(pid int) string {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return "(unknown command)"
+	}
+	parts := strings.Split(string(raw), "\x00")
+	if s := compactCmdline(parts); s != "" {
+		return s
+	}
+	return strings.ReplaceAll(strings.TrimRight(string(raw), "\x00"), "\x00", " ")
+}
+
+var sudoCommand = func(inner string) *exec.Cmd {
+	c := exec.Command("sudo", "--", "sh", "-c", inner)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return c
+}
+
+func runApproved(cmd string) error {
+	inner := protocol.StripLeadingSudo(cmd)
+	if inner == "" {
+		return fmt.Errorf("empty command")
+	}
+	return sudoCommand(inner).Run()
 }
 
 func readCwd(pid int) string {

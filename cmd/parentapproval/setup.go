@@ -300,7 +300,7 @@ func cmdInstallSkills() error {
 	if linked == 0 {
 		return fmt.Errorf("did not link the skill into any agent directory")
 	}
-	fmt.Println("Agents will pick up /parentapproval. Try: parentapproval ask --cmd \"pacman -S cowsay\"")
+	fmt.Println("Agents will pick up /parentapproval. Try: parentapproval ask --cmd \"echo ok\"")
 	return nil
 }
 

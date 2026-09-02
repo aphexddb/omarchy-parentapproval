@@ -31,18 +31,19 @@ PAM calls `parentapproval pam`; the paired phone buzzes; wait. The
 Omarchy skill's "type a sudo password / use pkexec because you are an agent"
 rule does not apply here.
 
-**Mint a request without running the command** (test, or show the parent the
-string they will see):
+**Ask from a coding agent** (this is the usual path; it runs the command after
+the parent approves):
 
 ```bash
 parentapproval ask --cmd "pacman -S cowsay"
 ```
 
-`ask` does **not** execute the command and does not unlock later sudo.
+`ask` shows the QR, waits for the phone, then runs `CMD` with `sudo`. A
+one-shot grant spends that approval so kids are not prompted a second time.
 
-**Wheel / not in `omarchy-kids`:** password or Omarchy passwordless sudo.
-Use `ask --cmd` only to test this daemon, or `setup-kid` to put someone on
-the parent-phone path.
+**Wheel / not in `omarchy-kids`:** password or Omarchy passwordless sudo
+for a normal `sudo`. `ask --cmd` still phones a parent, then runs the
+command with sudo. Use `setup-kid` to put someone on the parent-phone path.
 
 ## Commands
 
@@ -50,7 +51,7 @@ Binary is `/usr/bin/parentapproval` after `makepkg -f -si` or `sudo make install
 
 | Intent | Command |
 |---|---|
-| Test request (does not run CMD) | `parentapproval ask --cmd "pacman -S cowsay"` |
+| Ask, then run CMD with sudo | `parentapproval ask --cmd "pacman -S cowsay"` |
 | Pair parent phone | `parentapproval pair` |
 | Enable PAM + daemon | `sudo parentapproval enable` |
 | Create / lock a kid user | `sudo parentapproval setup-kid milo` |

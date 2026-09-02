@@ -83,3 +83,6 @@ Defaults:%omarchy-kids timestamp_timeout=0
 ```
 
 The daemon never runs the command. PAM success is the only grant.
+`parentapproval ask --cmd` is the agent entry: after allow it execs
+`sudo -- sh -c <cmd>`. Allow mints a one-shot grant so that sudo redeems
+without a second phone prompt.

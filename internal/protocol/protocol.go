@@ -79,6 +79,33 @@ func Verify(pub ed25519.PublicKey, canonical, sig []byte) bool {
 	return ed25519.Verify(pub, canonical, sig)
 }
 
+// StripLeadingSudo removes a leading sudo/pkexec (and a following --) so
+// `ask --cmd "sudo echo hi"` and `sudo echo hi` hash to the same inner command.
+func StripLeadingSudo(cmd string) string {
+	s := strings.TrimSpace(cmd)
+	for {
+		switch {
+		case strings.HasPrefix(strings.ToLower(s), "sudo "):
+			s = strings.TrimSpace(s[5:])
+		case strings.HasPrefix(s, "/usr/bin/sudo "):
+			s = strings.TrimSpace(s[len("/usr/bin/sudo "):])
+		case strings.HasPrefix(s, "/bin/sudo "):
+			s = strings.TrimSpace(s[len("/bin/sudo "):])
+		case strings.HasPrefix(strings.ToLower(s), "pkexec "):
+			s = strings.TrimSpace(s[7:])
+		case strings.HasPrefix(s, "-- "):
+			s = strings.TrimSpace(s[3:])
+		default:
+			return s
+		}
+	}
+}
+
+// SudoShellKey is the cmdline PAM will see when ask runs `sudo -- sh -c inner`.
+func SudoShellKey(displayed string) string {
+	return "sh -c " + StripLeadingSudo(displayed)
+}
+
 // Request is the JSON body for GET /a/{rid}.
 type Request struct {
 	V        int    `json:"v"`

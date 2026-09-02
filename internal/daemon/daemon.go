@@ -51,6 +51,7 @@ type Daemon struct {
 	pairing  *pairSession
 	requests map[string]*Request
 	byUser   map[string]string
+	grant    *oneShotGrant
 
 	// Last allow/deny so the overlay can flash a check or X after pending clears.
 	lastAskResult string
@@ -72,6 +73,14 @@ type pairSession struct {
 	Pending *store.Parent
 	Done    *protocol.PairDone
 	Waiters []chan *protocol.PairDone
+}
+
+// oneShotGrant lets `ask` run the approved command via sudo without a second
+// phone prompt. PAM redeems it once. The daemon still does not exec the command.
+type oneShotGrant struct {
+	User string
+	Cmd  string
+	Exp  time.Time
 }
 
 type Request struct {
@@ -382,6 +391,8 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		return map[string]string{"result": "cancel"}, nil
 	case "create":
 		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS)
+	case "redeem":
+		return map[string]any{"ok": d.Redeem(req.User, req.Cmd)}, nil
 	case "wait":
 		return d.Wait(req.RID)
 	case "cancel":
@@ -668,6 +679,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 	d.mu.Lock()
 	d.lastAskResult = ""
 	d.lastAskAt = time.Time{}
+	d.grant = nil
 	if oldID, ok := d.byUser[user]; ok {
 		if old, ok := d.requests[oldID]; ok && old.Result == "" {
 			old.Result = resultCancel
@@ -782,6 +794,21 @@ func (d *Daemon) Cancel(rid string) {
 		delete(d.byUser, r.User)
 	}
 	d.writePendingLocked()
+}
+
+func (d *Daemon) Redeem(user, cmd string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	g := d.grant
+	if g == nil || time.Now().After(g.Exp) {
+		d.grant = nil
+		return false
+	}
+	if g.User != user || g.Cmd != cmd {
+		return false
+	}
+	d.grant = nil
+	return true
 }
 
 func (d *Daemon) Pending() (map[string]any, error) {
@@ -1024,6 +1051,13 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 	if body.Decision == resultAllow || body.Decision == resultDeny {
 		d.lastAskResult = body.Decision
 		d.lastAskAt = time.Now()
+	}
+	if body.Decision == resultAllow {
+		d.grant = &oneShotGrant{
+			User: r.User,
+			Cmd:  protocol.SudoShellKey(r.Cmd),
+			Exp:  time.Now().Add(45 * time.Second),
+		}
 	}
 	close(r.done)
 	if d.byUser[r.User] == rid {
@@ -1311,6 +1345,15 @@ func PairAbort(socket, sid string) (map[string]any, error) {
 
 func Create(socket, user, service, cwd, cmd string, ttl int) (map[string]any, error) {
 	return Call(socket, sockReq{Op: "create", User: user, Service: service, CWD: cwd, Cmd: cmd, TTLS: ttl})
+}
+
+func Redeem(socket, user, cmd string) (bool, error) {
+	st, err := Call(socket, sockReq{Op: "redeem", User: user, Cmd: cmd})
+	if err != nil {
+		return false, err
+	}
+	ok, _ := st["ok"].(bool)
+	return ok, nil
 }
 
 func Wait(socket, rid string) (map[string]any, error) {

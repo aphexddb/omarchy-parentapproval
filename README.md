@@ -114,13 +114,13 @@ Against the installed systemd daemon (phone already paired):
 parentapproval ask --cmd "pacman -S cowsay"
 ```
 
-`--cmd` is the string shown on the phone. It is not executed.
+After a parent approves, `ask` runs that command with `sudo`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `parentapproval ask --cmd "…"` | Fire a test request (does not run the command) |
+| `parentapproval ask --cmd "…"` | Ask a parent, then run the command with sudo |
 | `parentapproval pair` | Pair a parent phone |
 | `parentapproval setup-kid NAME` | Create/lock a kid user |
 | `parentapproval enable` / `disable` | PAM, sudoers, systemd |
