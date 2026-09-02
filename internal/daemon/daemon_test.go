@@ -1330,6 +1330,38 @@ func TestWatchIdleWrongHost(t *testing.T) {
 	}
 }
 
+func TestTakeUnbiasedDigits(t *testing.T) {
+	got := string(takeUnbiasedDigits([]byte{249, 250, 255, 0, 9}, 3))
+	if got != "909" {
+		t.Fatalf("got %q want 909", got)
+	}
+	if s := takeUnbiasedDigits([]byte{255, 254, 253, 252, 251, 250}, 3); len(s) != 0 {
+		t.Fatalf("biased bytes produced %q", s)
+	}
+	if s := takeUnbiasedDigits([]byte{0, 1, 2, 3}, 2); string(s) != "01" {
+		t.Fatalf("got %q", s)
+	}
+	if takeUnbiasedDigits(nil, 3) != nil && len(takeUnbiasedDigits(nil, 3)) != 0 {
+		t.Fatal("empty src")
+	}
+}
+
+func TestRandomDigitsUniformAlphabet(t *testing.T) {
+	s := randomDigits(3)
+	if len(s) != 3 {
+		t.Fatalf("len %d: %q", len(s), s)
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			t.Fatalf("non-digit %q in %q", r, s)
+		}
+	}
+	s = randomDigits(6)
+	if len(s) != 6 {
+		t.Fatalf("len %d: %q", len(s), s)
+	}
+}
+
 func TestWatchRejectsReplay(t *testing.T) {
 	old := watchHold
 	watchHold = 20 * time.Millisecond

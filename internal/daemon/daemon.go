@@ -500,16 +500,34 @@ func randomHex(n int) string {
 }
 
 func randomDigits(n int) string {
-	const digits = "0123456789"
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	out := make([]byte, n)
-	for i := range out {
-		out[i] = digits[int(b[i])%10]
+	out := make([]byte, 0, n)
+	buf := make([]byte, 32)
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			panic(err)
+		}
+		out = append(out, takeUnbiasedDigits(buf, n-len(out))...)
 	}
 	return string(out)
+}
+
+// takeUnbiasedDigits maps bytes to decimal digits without modulo bias.
+// Values 250–255 are skipped (250 is the largest multiple of 10 in a byte).
+func takeUnbiasedDigits(src []byte, n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]byte, 0, n)
+	for _, v := range src {
+		if v >= 250 {
+			continue
+		}
+		out = append(out, '0'+v%10)
+		if len(out) == n {
+			return out
+		}
+	}
+	return out
 }
 
 func (d *Daemon) holdHTTPLocked() error {
