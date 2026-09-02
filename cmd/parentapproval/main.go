@@ -36,8 +36,15 @@ func main() {
 		usage(os.Stderr)
 		os.Exit(2)
 	}
+	cmd := os.Args[1]
+	if commandNeedsRoot(cmd) {
+		if err := requireRoot(cmd); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 	var err error
-	switch os.Args[1] {
+	switch cmd {
 	case "daemon":
 		err = cmdDaemon(os.Args[2:])
 	case "pair":
@@ -81,9 +88,8 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			os.Exit(ee.ExitCode())
+		if ec, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(ec.ExitCode())
 		}
 		os.Exit(1)
 	}
@@ -93,16 +99,16 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage: parentapproval <command> [args]
 
 Commands:
-  ask --cmd CMD                 ask a parent, then run CMD with sudo
-  pair                          pair a parent phone
-  status                        show daemon and paired phones
+  ask --cmd CMD                 ask a parent, then the daemon runs CMD as root
+  pair                          pair a parent phone (root)
+  status                        show daemon and paired phones (root)
   pending [--json]              list pending requests
-  revoke DEVICE_ID              unpair a phone
-  doctor                        check PAM and daemon
+  revoke DEVICE_ID              unpair a phone (root)
+  doctor                        check PAM and daemon (root)
   enable                        install PAM, sudoers, systemd (root)
   disable                       remove PAM and sudoers hooks (root)
   setup-kid USER                create a kid account; link agent skill (root)
-  install-skills                install the agent skill (this user; root: parent+kids)
+  install-skills                install the agent skill (root)
   daemon [--dev] [--relay URL]  run the daemon
   pam                           PAM helper (called by pam_exec)
   version                       print version
@@ -119,6 +125,26 @@ Environment:
 var version = "0.1.0"
 
 func readVersion() string { return version }
+
+var geteuid = os.Geteuid
+
+func requireRoot(cmd string) error {
+	if geteuid() != 0 {
+		return fmt.Errorf("%s %s must run as root (sudo parentapproval %s)", cliName, cmd, cmd)
+	}
+	return nil
+}
+
+func commandNeedsRoot(cmd string) bool {
+	switch cmd {
+	case "pair", "status", "revoke", "doctor",
+		"enable", "disable", "setup-kid", "install-skills",
+		"teardown-firewall":
+		return true
+	default:
+		return false
+	}
+}
 
 type paths struct {
 	state    string
@@ -441,7 +467,7 @@ func cmdAsk(args []string) error {
 	if err := presentAndWait(p.socket, created); err != nil {
 		return err
 	}
-	return runApproved(cmd)
+	return runApproved(p.socket, userName, cmd)
 }
 
 func cmdPam() error {
@@ -684,18 +710,35 @@ func readCmdline(pid int) string {
 	return strings.ReplaceAll(strings.TrimRight(string(raw), "\x00"), "\x00", " ")
 }
 
-var sudoCommand = func(inner string) *exec.Cmd {
-	c := exec.Command("sudo", "--", "sh", "-c", inner)
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return c
-}
+type exitStatus int
 
-func runApproved(cmd string) error {
-	inner := protocol.StripLeadingSudo(cmd)
-	if inner == "" {
-		return fmt.Errorf("empty command")
+func (e exitStatus) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitStatus) ExitCode() int { return int(e) }
+
+func runApproved(socket, userName, cmd string) error {
+	st, err := daemon.Exec(socket, userName, cmd)
+	if err != nil {
+		return err
 	}
-	return sudoCommand(inner).Run()
+	if s, _ := st["stdout"].(string); s != "" {
+		fmt.Fprint(os.Stdout, s)
+	}
+	if s, _ := st["stderr"].(string); s != "" {
+		fmt.Fprint(os.Stderr, s)
+	}
+	code := 0
+	switch v := st["exit"].(type) {
+	case float64:
+		code = int(v)
+	case int:
+		code = v
+	case int64:
+		code = int(v)
+	}
+	if code != 0 {
+		return exitStatus(code)
+	}
+	return nil
 }
 
 func readCwd(pid int) string {

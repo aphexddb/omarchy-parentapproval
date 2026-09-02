@@ -6,12 +6,12 @@ This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids ac
 
 A community extra for Omarchy.
 
-Agents: load [`default/agents/skills/parentapproval/SKILL.md`](default/agents/skills/parentapproval/SKILL.md) (or run `parentapproval install-skills`). The usual test is:
+Agents: load [`default/agents/skills/parentapproval/SKILL.md`](default/agents/skills/parentapproval/SKILL.md) (or run `sudo parentapproval install-skills`). The usual test is:
 
 first time setup
 ```bash
 sudo parentapproval enable
-parentapproval pair               
+sudo parentapproval pair
 sudo parentapproval setup-kid milo
 ```
 
@@ -51,23 +51,23 @@ Tear it down (package, overlay, skill links, daemon state; not kid logins):
 
 `sudo make install` also writes to `/usr`. Prefer the package so systemd sysusers and the daemon unit are enabled.
 
-Then teach coding agents the CLI (as the parent, not root):
+Then teach coding agents the CLI:
 
 ```bash
-parentapproval install-skills
+sudo parentapproval install-skills
 ```
 
-That symlinks the skill into `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.gemini/config/skills`, and `~/.grok/skills`. `setup-kid` does the same for the kid. `sudo parentapproval install-skills` also links every `omarchy-kids` home.
+That symlinks the skill into the parent’s and kids’ agent dirs (`~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.gemini/config/skills`, and `~/.grok/skills`). `setup-kid` does the same for the kid.
 
 Then, as the parent (your wheel account, not the kid):
 
 ```bash
 sudo parentapproval enable
-parentapproval pair               # scan; keys land in /var/lib via the systemd daemon
+sudo parentapproval pair          # scan; keys land in /var/lib via the systemd daemon
 sudo parentapproval setup-kid milo
 ```
 
-`pair`, `ask`, `status`, `pending`, `revoke`, and `doctor` talk to the systemd daemon even as a regular user. `enable`, `disable`, and `setup-kid` still need sudo. Use `--dev` only for an unprivileged local dry-run.
+`ask` and `pending` talk to the systemd daemon as a regular user. Pair, status, revoke, doctor, enable, disable, setup-kid, and install-skills need sudo. Use `--dev` only for an unprivileged local dry-run of the daemon.
 
 Optional desktop overlay, so polkit and GUI prompts get the same QR card:
 
@@ -95,7 +95,7 @@ Unprivileged (`--dev` is local HTTP, no PAM):
 
 ```bash
 parentapproval daemon --dev      # terminal 1
-parentapproval pair --dev        # terminal 2, scan
+sudo parentapproval pair --dev   # terminal 2, scan
 parentapproval ask --dev --cmd "pacman -S cowsay"
 ```
 
@@ -114,20 +114,20 @@ Against the installed systemd daemon (phone already paired):
 parentapproval ask --cmd "pacman -S cowsay"
 ```
 
-After a parent approves, `ask` runs that command with `sudo`.
+After a parent approves, the daemon runs that command as root. No sudo password.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `parentapproval ask --cmd "…"` | Ask a parent, then run the command with sudo |
-| `parentapproval pair` | Pair a parent phone |
-| `parentapproval setup-kid NAME` | Create/lock a kid user |
-| `parentapproval enable` / `disable` | PAM, sudoers, systemd |
-| `parentapproval status` | Host id, relay, paired phones |
-| `parentapproval revoke DEVICE_ID` | Drop a phone |
-| `parentapproval doctor` | Check PAM order, daemon, relay |
-| `parentapproval install-skills` | Symlink the agent skill into this user's coding-agent dirs (root: parent + all kids) |
+| `parentapproval ask --cmd "…"` | Ask a parent; daemon runs the command as root |
+| `sudo parentapproval pair` | Pair a parent phone |
+| `sudo parentapproval setup-kid NAME` | Create/lock a kid user |
+| `sudo parentapproval enable` / `disable` | PAM, sudoers, systemd |
+| `sudo parentapproval status` | Host id, relay, paired phones |
+| `sudo parentapproval revoke DEVICE_ID` | Drop a phone |
+| `sudo parentapproval doctor` | Check PAM order, daemon, relay |
+| `sudo parentapproval install-skills` | Symlink the agent skill (parent + all kids) |
 | `parentapproval daemon [--dev] [--relay URL]` | The service |
 
 `parentapproval --help` is the flag-level source of truth.

@@ -82,7 +82,7 @@ Defaults:%omarchy-kids timestamp_timeout=0
 %omarchy-kids ALL=(ALL:ALL) ALL
 ```
 
-The daemon never runs the command. PAM success is the only grant.
-`parentapproval ask --cmd` is the agent entry: after allow it execs
-`sudo -- sh -c <cmd>`. Allow mints a one-shot grant so that sudo redeems
-without a second phone prompt.
+PAM success is the grant for `sudo`. After `ask` allow, the root daemon
+runs the approved command itself (`sh -c`) so the kid is not prompted
+for a sudo password. Allow also mints a one-shot grant PAM can redeem
+if something still calls sudo for the same command.

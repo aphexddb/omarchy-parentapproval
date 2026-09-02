@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -75,12 +77,14 @@ type pairSession struct {
 	Waiters []chan *protocol.PairDone
 }
 
-// oneShotGrant lets `ask` run the approved command via sudo without a second
-// phone prompt. PAM redeems it once. The daemon still does not exec the command.
+// oneShotGrant lets `ask` run the approved command as root without a second
+// phone prompt or a sudo password. PAM can still redeem it for a matching sudo.
 type oneShotGrant struct {
-	User string
-	Cmd  string
-	Exp  time.Time
+	User  string
+	Cmd   string
+	Inner string
+	CWD   string
+	Exp   time.Time
 }
 
 type Request struct {
@@ -303,6 +307,9 @@ func (d *Daemon) handleSock(c net.Conn) {
 		_ = enc.Encode(map[string]string{"error": "bad json"})
 		return
 	}
+	if req.Op == "exec" {
+		_ = c.SetDeadline(time.Now().Add(10 * time.Minute))
+	}
 	resp, err := d.dispatch(req, uid, uidOK)
 	if err != nil {
 		_ = enc.Encode(map[string]string{"error": err.Error()})
@@ -393,6 +400,8 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS)
 	case "redeem":
 		return map[string]any{"ok": d.Redeem(req.User, req.Cmd)}, nil
+	case "exec":
+		return d.Exec(req.User, req.Cmd)
 	case "wait":
 		return d.Wait(req.RID)
 	case "cancel":
@@ -656,7 +665,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		ttlS = 180
 	}
 	if d.store.ParentCount() == 0 {
-		return nil, errors.New("no parent phone is paired — run parentapproval pair")
+		return nil, errors.New("no parent phone is paired — run sudo parentapproval pair")
 	}
 
 	nonce := make([]byte, 16)
@@ -794,6 +803,58 @@ func (d *Daemon) Cancel(rid string) {
 		delete(d.byUser, r.User)
 	}
 	d.writePendingLocked()
+}
+
+func (d *Daemon) Exec(userName, cmd string) (map[string]any, error) {
+	inner := protocol.StripLeadingSudo(cmd)
+	if inner == "" {
+		return nil, errors.New("empty command")
+	}
+	d.mu.Lock()
+	g := d.grant
+	if g == nil || time.Now().After(g.Exp) {
+		d.grant = nil
+		d.mu.Unlock()
+		return nil, errors.New("no approved command to run")
+	}
+	if g.User != userName || g.Inner != inner {
+		d.mu.Unlock()
+		return nil, errors.New("command is not the approved request")
+	}
+	cwd := g.CWD
+	d.grant = nil
+	d.mu.Unlock()
+
+	c := exec.Command("sh", "-c", inner)
+	if cwd != "" {
+		c.Dir = cwd
+	}
+	if u, err := user.Lookup(userName); err == nil {
+		c.Env = append(os.Environ(),
+			"HOME="+u.HomeDir,
+			"USER="+userName,
+			"LOGNAME="+userName,
+			"SUDO_USER="+userName,
+		)
+	}
+	var stdout, stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	err := c.Run()
+	exit := 0
+	if err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			return nil, err
+		}
+		exit = ee.ExitCode()
+	}
+	return map[string]any{
+		"ok":     exit == 0,
+		"stdout": stdout.String(),
+		"stderr": stderr.String(),
+		"exit":   exit,
+	}, nil
 }
 
 func (d *Daemon) Redeem(user, cmd string) bool {
@@ -1054,9 +1115,11 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 	}
 	if body.Decision == resultAllow {
 		d.grant = &oneShotGrant{
-			User: r.User,
-			Cmd:  protocol.SudoShellKey(r.Cmd),
-			Exp:  time.Now().Add(45 * time.Second),
+			User:  r.User,
+			Cmd:   protocol.SudoShellKey(r.Cmd),
+			Inner: protocol.StripLeadingSudo(r.Cmd),
+			CWD:   r.CWD,
+			Exp:   time.Now().Add(45 * time.Second),
 		}
 	}
 	close(r.done)
@@ -1354,6 +1417,10 @@ func Redeem(socket, user, cmd string) (bool, error) {
 	}
 	ok, _ := st["ok"].(bool)
 	return ok, nil
+}
+
+func Exec(socket, user, cmd string) (map[string]any, error) {
+	return Call(socket, sockReq{Op: "exec", User: user, Cmd: cmd})
 }
 
 func Wait(socket, rid string) (map[string]any, error) {

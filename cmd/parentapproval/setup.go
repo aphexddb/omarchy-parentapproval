@@ -42,7 +42,7 @@ func cmdEnable() error {
 		fmt.Fprintf(os.Stderr, "note: systemd unit not enabled (%v)\n", err)
 	}
 	fmt.Println("Parent Approval is enabled.")
-	fmt.Println("Next: parentapproval pair")
+	fmt.Println("Next: sudo parentapproval pair")
 	fmt.Println("Then: sudo parentapproval setup-kid <username>")
 	linkSkillsForKids()
 	return nil

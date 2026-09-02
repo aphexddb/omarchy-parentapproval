@@ -456,6 +456,59 @@ func TestRedeemAfterAllow(t *testing.T) {
 	}
 }
 
+func TestExecGrantRunsApprovedCommand(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	created, err := Create(sock, "milo", "sudo", t.TempDir(), "sudo echo LLLOOLLL", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, _ := created["qr_url"].(string)
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body protocol.Request
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		res.Body.Close()
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
+	sig := protocol.Sign(priv, canon)
+	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
+	raw, _ := json.Marshal(dec)
+	post, err := http.Post(url+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("allow %s", post.Status)
+	}
+
+	st, err := Exec(sock, "milo", "sudo echo LLLOOLLL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := st["stdout"].(string)
+	if !strings.Contains(out, "LLLOOLLL") {
+		t.Fatalf("stdout %q", out)
+	}
+	if code, _ := st["exit"].(float64); code != 0 {
+		t.Fatalf("exit %+v", st["exit"])
+	}
+
+	if _, err := Exec(sock, "milo", "sudo echo LLLOOLLL"); err == nil {
+		t.Fatal("exec grant must be single-use")
+	}
+	if _, err := Exec(sock, "milo", "rm -rf /"); err == nil {
+		t.Fatal("unapproved command must not run")
+	}
+}
+
 func TestListenSpec(t *testing.T) {
 	cases := []struct {
 		in, network, addr string

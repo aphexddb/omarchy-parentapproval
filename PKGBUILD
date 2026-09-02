@@ -1,7 +1,7 @@
 # Maintainer: parentapproval contributors
 pkgname=parentapproval
 pkgver=0.1.0
-pkgrel=30
+pkgrel=31
 pkgdesc="Parent-phone approval for Omarchy kids accounts"
 arch=('x86_64' 'aarch64')
 url="https://github.com/aphexddb/omarchy-parentapproval"
