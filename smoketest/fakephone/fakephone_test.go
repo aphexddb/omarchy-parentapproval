@@ -162,8 +162,12 @@ func TestSeedsDistinct(t *testing.T) {
 	p := NewSeeded()
 	s := NewStranger()
 	h := HostPrivate()
+	hB := HostPrivateB()
 	if bytes.Equal(p.Priv, s.Priv) || bytes.Equal(p.Pub, h.Public().(ed25519.PublicKey)) {
 		t.Fatal("seeds collided")
+	}
+	if bytes.Equal(h, hB) {
+		t.Fatal("host A and host B keys collided")
 	}
 	if p.DeviceID != DeviceIDParent || s.DeviceID != DeviceIDStranger {
 		t.Fatal("device ids")
@@ -179,6 +183,9 @@ func TestPairConfirmAllowUsesPairedKey(t *testing.T) {
 	sess, done := pairPhone(t, sock, phone)
 	if done.HostID != d.HostID() {
 		t.Fatalf("host_id %s want %s", done.HostID, d.HostID())
+	}
+	if done.HostName == "" || done.HostName != d.HostName() {
+		t.Fatalf("host_name %q want %q", done.HostName, d.HostName())
 	}
 	st, err := daemon.Status(sock)
 	if err != nil {
@@ -411,6 +418,9 @@ func TestSealedAskHidesCleartext(t *testing.T) {
 	}
 	if shown.Cmd != "pacman -S cowsay" {
 		t.Fatalf("unsealed cmd %q", shown.Cmd)
+	}
+	if shown.HostName == "" {
+		t.Fatal("unsealed ask missing host_name")
 	}
 	if _, err := protocol.OpenAsk(wire.Sealed[DeviceIDParent], NewStranger().Priv); err == nil {
 		t.Fatal("stranger opened parent box")
