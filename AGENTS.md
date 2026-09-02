@@ -8,7 +8,7 @@ and call `parentapproval`. Read that skill before using or changing
 the CLI.
 
 ```bash
-parentapproval ask --cmd "pacman -S cowsay"
+parentapproval ask -c "pacman -S cowsay"
 ```
 
 ## Release
