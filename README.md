@@ -143,7 +143,7 @@ git tag -a v1.2.3 -m "v1.2.3"
 git push origin HEAD v1.2.3
 ```
 
-GoReleaser runs `scripts/stamp-version` from the tag and publishes the binaries. Dry-run: `make release-snapshot`.
+GoReleaser publishes Linux amd64 and arm64 archives and a `parentapproval-bin` AUR package (systemd unit, sysusers, sudoers, overlay, skill). The in-tree `PKGBUILD` stays a source checkout recipe. AUR push needs repo secret `AUR_KEY`. Dry-run: `make release-snapshot`.
 
 ## What this is not
 
