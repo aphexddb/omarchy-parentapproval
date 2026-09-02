@@ -7,7 +7,7 @@ COMMIT := $(shell git rev-parse HEAD 2>/dev/null || true)
 GOFLAGS ?= -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: all build relay test install uninstall check-root-install check-root-uninstall release-snapshot goreleaser-check
+.PHONY: all build relay test smoke install uninstall check-root-install check-root-uninstall release-snapshot goreleaser-check
 
 all: build
 
@@ -34,7 +34,12 @@ relay:
 	rm -f bin/omarchy-parentapproval-relay
 
 test:
-	go test ./cmd/... ./internal/... ./web
+	go test ./cmd/... ./internal/... ./web ./smoketest/fakephone
+
+# Docker relay e2e. Skips if docker is missing unless PARENTAPPROVAL_SMOKE=1.
+.PHONY: smoke
+smoke:
+	go test -tags=smoke -count=1 -timeout 3m -shuffle=off ./smoketest
 
 goreleaser-check:
 	goreleaser check
