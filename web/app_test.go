@@ -29,6 +29,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function wireA2HS",
 		"function showIdle",
 		"function renderHostList",
+		"function clearAllRecords",
+		"function showUnpairConfirm",
 		"function showDecision",
 		"function maybeResumeIdle",
 		"function wireHomeNotify",
@@ -88,6 +90,10 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`<h1>Paired</h1>`,
 		`Paired with`,
 		`id="home-host-list"`,
+		`id="unpair-btn"`,
+		`id="unpair-confirm"`,
+		`id="unpair-confirm-btn"`,
+		`id="unpair-cancel-btn"`,
 		`sudo parentapproval pair`,
 		`Get started`,
 		`curl -fsSL https://parentapprovals.com/install | bash`,
@@ -224,6 +230,57 @@ func TestIdleShowsPairedWithHostList(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("host_list_sim: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("unexpected sim output: %s", out)
+	}
+}
+
+func TestUnpairDeletesAllPhoneKeys(t *testing.T) {
+	html, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlS := string(html)
+	for _, want := range []string{
+		`id="unpair-btn"`,
+		`id="unpair-confirm"`,
+		`id="unpair-confirm-btn"`,
+		`id="unpair-cancel-btn"`,
+	} {
+		if !strings.Contains(htmlS, want) {
+			t.Errorf("index.html missing %q", want)
+		}
+	}
+	if !strings.Contains(htmlS, `<section id="unpair-confirm"`) {
+		t.Error("unpair confirmation must be a full-screen section, not a browser dialog")
+	}
+	js, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(js)
+	if strings.Contains(s, "window.confirm") || strings.Contains(s, "confirm(") {
+		t.Error("unpair must not use window.confirm")
+	}
+	for _, want := range []string{
+		"function clearAllRecords",
+		"function showUnpairConfirm",
+		`objectStore(STORE).clear()`,
+		`localStorage.removeItem("pa_rec")`,
+		`pa_rec=; Max-Age=0`,
+		`$("unpair-btn")`,
+		`show("unpair-confirm")`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("app.js missing %q", want)
+		}
+	}
+	cmd := exec.Command("node", "unpair_sim.mjs")
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("unpair_sim: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "ok") {
 		t.Fatalf("unexpected sim output: %s", out)
