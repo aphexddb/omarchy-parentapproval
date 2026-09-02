@@ -78,6 +78,19 @@ func TestShippedPAMInclude(t *testing.T) {
 	}
 }
 
+func pamExecModuleLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		if strings.Contains(line, "pam_exec.so") {
+			return line
+		}
+	}
+	return ""
+}
+
 func TestShippedPolkitPAMHasNoStdout(t *testing.T) {
 	raw, err := os.ReadFile("../../packaging/parentapproval-polkit.pam")
 	if err != nil {
@@ -94,20 +107,24 @@ func TestShippedPolkitPAMHasNoStdout(t *testing.T) {
 			t.Errorf("parentapproval-polkit.pam missing %q", want)
 		}
 	}
-	if strings.Contains(s, "stdout") {
-		t.Fatal("polkit pam_exec must not pass stdout; that paints a QR on the stock dialog")
+	execLine := pamExecModuleLine(s)
+	if execLine == "" {
+		t.Fatal("parentapproval-polkit.pam missing pam_exec line")
+	}
+	if strings.Contains(execLine, "stdout") {
+		t.Fatalf("polkit pam_exec must not pass stdout: %s", execLine)
 	}
 }
 
 func TestPAMPolkitAuthLinesOmitStdout(t *testing.T) {
-	lines := pamPolkitAuthLines()
-	if strings.Contains(lines, "stdout") {
-		t.Fatalf("polkit include must not use pam_exec stdout:\n%s", lines)
+	execLine := pamExecModuleLine(pamPolkitAuthLines())
+	if execLine == "" {
+		t.Fatal("polkit include missing pam_exec")
 	}
-	if !strings.Contains(lines, "pam_exec.so seteuid ") {
-		t.Fatalf("polkit include missing pam_exec:\n%s", lines)
+	if strings.Contains(execLine, "stdout") {
+		t.Fatalf("polkit include must not use pam_exec stdout:\n%s", execLine)
 	}
-	if !strings.Contains(pamAuthLines(), "seteuid stdout") {
+	if !strings.Contains(pamExecModuleLine(pamAuthLines()), "seteuid stdout") {
 		t.Fatal("sudo include still needs stdout so the TTY QR works")
 	}
 }

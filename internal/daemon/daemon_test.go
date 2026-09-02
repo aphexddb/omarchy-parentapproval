@@ -580,7 +580,8 @@ func TestRedeemAfterAllow(t *testing.T) {
 }
 
 func TestPolkitPendingOmitsQR(t *testing.T) {
-	_, sock := startTestDaemon(t)
+	d, sock := startTestDaemon(t)
+	enrollParent(t, d)
 	created, err := CreateAction(sock, "milo", "polkit", "/", "/usr/bin/true", 30, "org.freedesktop.policykit.exec", "cookie-a")
 	if err != nil {
 		t.Fatal(err)
