@@ -78,6 +78,14 @@ sudo parentapproval pair --dev   # terminal 2, scan
 parentapproval ask --dev --cmd "pacman -S cowsay"
 ```
 
+Headless pair + allow/deny against the production relay image (no phone):
+
+```bash
+make smoke
+```
+
+That builds `Dockerfile`, starts an isolated compose project on loopback, and drives a Go fake-phone over the same HTTP the PWA uses (`/p/{token}`, key-bound SAS, phone confirm, sealed ask, handoff, `/v1/watch` with a one-time nonce, allow/deny). `make test` does not start Docker.
+
 Against a local relay:
 
 ```bash
