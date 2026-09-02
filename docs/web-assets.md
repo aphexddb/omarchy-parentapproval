@@ -7,8 +7,8 @@ Subresource Integrity pins in `web/index.html`. `sha256` is for `sha256sum`.
 |---|---|---|
 | `web/nacl.min.js` | `973cc5733cc7432e30ee4682098f413094f494bccf76a567c23908c5035ddbbc` | `sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/` |
 | `web/sha256.min.js` | `4b53da9acab6a5d4010107be2025002fe1a22da64804dd5200b46895cb899219` | `sha384-2hE+62EhDTI8GB1l6/KBZldM8qsy8CUJ/e5YlZaSbD6Bi4z0YhdrH2LCjDqYXAkg` |
-| `web/app.js` | `3747e1691e82b8516217078a92dcd5226b86a5236bae82a17a771c0a3d16ea5a` | (versioned `?v=` query; hash this file after each change) |
-| `web/app.css` | `f335f2ec1bae82653ebba8198c32ecbf1e87ad2c45281db5d5efbbb6f59b883d` | |
+| `web/app.js` | `a7ff7fb186a983d5bb4958c0e34e29ed75322ecb2a8ea5f7a1a7090957c3d2c9` | (versioned `?v=` query; hash this file after each change) |
+| `web/app.css` | `13cd618de98fcd97a52cd0e6afdb86aee6dfe236e6e7fdb1324c03ae7d69559e` | |
 | `web/sw.js` | `90a0efbf101c8324b85058263c2d99bb5f7d44c8cb885ea6334154ee07bbf415` | |
 
 ```bash

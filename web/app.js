@@ -525,6 +525,16 @@ function wireHomeNotify(rec) {
   };
 }
 
+function renderHostList(el, recs) {
+  if (!el) return;
+  el.replaceChildren();
+  for (const r of recs || []) {
+    const li = document.createElement("li");
+    li.textContent = (r && r.host_name) || "laptop";
+    el.appendChild(li);
+  }
+}
+
 function showIdle(recs) {
   show("home");
   const msg = $("home-notify-msg");
@@ -536,7 +546,7 @@ function showIdle(recs) {
   $("home-unpaired").classList.toggle("hidden", paired);
   $("home-paired").classList.toggle("hidden", !paired);
   if (!paired) return;
-  $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
+  renderHostList($("home-host-list"), recs);
   const rec = recs[0];
   wireHomeNotify(rec);
   if (notificationsGranted()) {
