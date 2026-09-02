@@ -84,7 +84,7 @@ Headless pair + allow/deny against the production relay image (no phone):
 make smoke
 ```
 
-That builds `Dockerfile`, starts an isolated compose project on loopback, and drives a Go fake-phone over the same HTTP the PWA uses (`/p/{token}`, key-bound SAS, phone confirm, sealed ask, handoff, `/v1/watch` with a one-time nonce, allow/deny). `make test` does not start Docker.
+That builds `Dockerfile`, starts an isolated compose project on loopback, and drives a Go fake-phone over the same HTTP the PWA uses (`/p/{token}`, key-bound SAS, phone confirm, sealed ask, handoff, `/v1/watch` with a one-time nonce, allow/deny). `make test` does not start Docker. GitHub Actions runs both (`make test` and `PARENTAPPROVAL_SMOKE=1 make smoke`) on every push and pull request.
 
 Against a local relay:
 
