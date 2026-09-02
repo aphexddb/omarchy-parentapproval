@@ -11,4 +11,8 @@ bin/
 /Retrieving
 /tmp-parentapproval-nft.txt
 .grok/
+.claude/
+.omp/
+.pi/
 node_modules/
+TODO.md
