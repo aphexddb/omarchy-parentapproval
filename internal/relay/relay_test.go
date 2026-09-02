@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -524,7 +526,33 @@ func TestHandoffAndPairManifest(t *testing.T) {
 	}
 }
 
-func TestWatchRequiresHostID(t *testing.T) {
+func enrollWatchParent(t *testing.T, conn *websocket.Conn, deviceID string, pub ed25519.PublicKey) {
+	t.Helper()
+	if err := conn.WriteJSON(msg{Op: "parent", DeviceID: deviceID, PubKey: protocol.B64(pub)}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var ok msg
+	if err := conn.ReadJSON(&ok); err != nil {
+		t.Fatal(err)
+	}
+	if ok.Op != "ok" {
+		t.Fatalf("enroll %+v", ok)
+	}
+}
+
+func signedWatchURL(base, hostID, deviceID string, priv ed25519.PrivateKey) string {
+	exp := time.Now().Add(time.Minute).Unix()
+	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, exp))
+	q := url.Values{}
+	q.Set("host_id", hostID)
+	q.Set("device_id", deviceID)
+	q.Set("exp", strconv.FormatInt(exp, 10))
+	q.Set("sig", protocol.B64(sig))
+	return base + "/v1/watch?" + q.Encode()
+}
+
+func TestWatchRequiresAuth(t *testing.T) {
 	_, ts := newTestRelay(t)
 	res, err := http.Get(ts.URL + "/v1/watch")
 	if err != nil {
@@ -534,15 +562,56 @@ func TestWatchRequiresHostID(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %s", res.Status)
 	}
+	bare, err := http.Get(ts.URL + "/v1/watch?host_id=anyone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bare.Body.Close()
+	if bare.StatusCode != http.StatusBadRequest {
+		t.Fatalf("host_id-only %s", bare.Status)
+	}
+}
+
+func TestWatchRejectsForeignKey(t *testing.T) {
+	_, ts := newTestRelay(t)
+	hostPub, hostPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phonePub, phonePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stranger, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, hostPriv, hostPub)
+	enrollWatchParent(t, conn, "phone-1", phonePub)
+	_ = phonePriv
+
+	res, err := http.Get(signedWatchURL(ts.URL, protocol.B64(hostPub), "phone-1", stranger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status %s", res.Status)
+	}
 }
 
 func TestWatchReturnsLiveAskImmediately(t *testing.T) {
 	_, ts := newTestRelay(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	hostPub, hostPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := dialHost(t, ts, priv, pub)
+	phonePub, phonePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, hostPriv, hostPub)
+	enrollWatchParent(t, conn, "phone-1", phonePub)
 	if err := conn.WriteJSON(msg{Op: "open", ID: "1", Kind: "ask", RID: "rid-live"}); err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +624,7 @@ func TestWatchReturnsLiveAskImmediately(t *testing.T) {
 		t.Fatalf("opened %+v", opened)
 	}
 
-	res, err := http.Get(ts.URL + "/v1/watch?host_id=" + protocol.B64(pub))
+	res, err := http.Get(signedWatchURL(ts.URL, protocol.B64(hostPub), "phone-1", phonePriv))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,17 +646,22 @@ func TestWatchReturnsLiveAskImmediately(t *testing.T) {
 
 func TestWatchUnblocksWhenAskOpens(t *testing.T) {
 	_, ts := newTestRelay(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	hostPub, hostPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := dialHost(t, ts, priv, pub)
-	hostID := protocol.B64(pub)
+	phonePub, phonePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, hostPriv, hostPub)
+	enrollWatchParent(t, conn, "phone-1", phonePub)
+	hostID := protocol.B64(hostPub)
 
 	done := make(chan watchEvent, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		res, err := http.Get(ts.URL + "/v1/watch?host_id=" + hostID)
+		res, err := http.Get(signedWatchURL(ts.URL, hostID, "phone-1", phonePriv))
 		if err != nil {
 			errCh <- err
 			return
@@ -632,7 +706,18 @@ func TestWatchIdleWhenNoAsk(t *testing.T) {
 	t.Cleanup(func() { watchHold = prev })
 
 	_, ts := newTestRelay(t)
-	res, err := http.Get(ts.URL + "/v1/watch?host_id=unknown-host")
+	hostPub, hostPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phonePub, phonePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, hostPriv, hostPub)
+	enrollWatchParent(t, conn, "phone-1", phonePub)
+
+	res, err := http.Get(signedWatchURL(ts.URL, protocol.B64(hostPub), "phone-1", phonePriv))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,11 +736,22 @@ func TestWatchIdleWhenNoAsk(t *testing.T) {
 
 func TestWatchIgnoresOtherHost(t *testing.T) {
 	_, ts := newTestRelay(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	hostPub, hostPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := dialHost(t, ts, priv, pub)
+	phonePub, phonePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPub, otherPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, hostPriv, hostPub)
+	enrollWatchParent(t, conn, "phone-1", phonePub)
+	other := dialHost(t, ts, otherPriv, otherPub)
+	enrollWatchParent(t, other, "phone-other", phonePub)
 	if err := conn.WriteJSON(msg{Op: "open", ID: "1", Kind: "ask", RID: "rid-other"}); err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +765,8 @@ func TestWatchIgnoresOtherHost(t *testing.T) {
 	watchHold = 40 * time.Millisecond
 	t.Cleanup(func() { watchHold = prev })
 
-	res, err := http.Get(ts.URL + "/v1/watch?host_id=not-this-host")
+	// Paired to the other laptop; must not see this host's ask.
+	res, err := http.Get(signedWatchURL(ts.URL, protocol.B64(otherPub), "phone-other", phonePriv))
 	if err != nil {
 		t.Fatal(err)
 	}

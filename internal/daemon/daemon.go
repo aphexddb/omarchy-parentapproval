@@ -434,6 +434,9 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		if err := d.store.Revoke(req.SID); err != nil {
 			return nil, err
 		}
+		if d.relay != nil {
+			d.relay.RevokeParent(req.SID)
+		}
 		return map[string]bool{"ok": true}, nil
 	default:
 		return nil, fmt.Errorf("unknown op %q", req.Op)
@@ -623,6 +626,9 @@ func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
 		return nil, err
 	}
 	d.consumePendingPushReady(parent.DeviceID)
+	if d.relay != nil {
+		d.relay.PublishParent(parent.DeviceID, parent.PubKey)
+	}
 	done := &protocol.PairDone{
 		OK:       true,
 		HostID:   d.HostID(),
@@ -1090,40 +1096,28 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 }
 
 func (d *Daemon) handleWatch(w http.ResponseWriter, req *http.Request) {
-	hostIDs := req.URL.Query()["host_id"]
-	if len(hostIDs) == 0 {
-		http.Error(w, `{"error":"host_id required"}`, http.StatusBadRequest)
+	q := req.URL.Query()
+	if q.Get("host_id") == "" || q.Get("device_id") == "" || q.Get("sig") == "" || q.Get("exp") == "" {
+		http.Error(w, `{"error":"host_id, device_id, exp, sig required"}`, http.StatusBadRequest)
 		return
 	}
-	self := d.HostID()
-	match := false
-	for _, id := range hostIDs {
-		if strings.TrimSpace(id) == self {
-			match = true
-			break
-		}
+	if !d.verifyWatchAuth(req) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
-	if match {
-		if ev := d.liveAskEvent(); ev != nil {
-			writeJSON(w, ev)
-			return
-		}
-	}
 	ch := make(chan watchEvent, 1)
-	if match {
-		d.mu.Lock()
-		d.watchers = append(d.watchers, ch)
-		if ev := d.liveAskEventLocked(); ev != nil {
-			d.mu.Unlock()
-			d.removeWatcher(ch)
-			writeJSON(w, ev)
-			return
-		}
+	d.mu.Lock()
+	d.watchers = append(d.watchers, ch)
+	if ev := d.liveAskEventLocked(); ev != nil {
 		d.mu.Unlock()
-		defer d.removeWatcher(ch)
+		d.removeWatcher(ch)
+		writeJSON(w, ev)
+		return
 	}
+	d.mu.Unlock()
+	defer d.removeWatcher(ch)
 
 	timer := time.NewTimer(watchHold)
 	defer timer.Stop()
@@ -1137,10 +1131,31 @@ func (d *Daemon) handleWatch(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (d *Daemon) liveAskEvent() *watchEvent {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.liveAskEventLocked()
+func (d *Daemon) verifyWatchAuth(req *http.Request) bool {
+	q := req.URL.Query()
+	hostID := strings.TrimSpace(q.Get("host_id"))
+	deviceID := strings.TrimSpace(q.Get("device_id"))
+	sigB64 := strings.TrimSpace(q.Get("sig"))
+	exp, err := strconv.ParseInt(strings.TrimSpace(q.Get("exp")), 10, 64)
+	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" {
+		return false
+	}
+	if hostID != d.HostID() || !protocol.WatchAuthFresh(exp, time.Now().Unix()) {
+		return false
+	}
+	parent, ok := d.store.GetParent(deviceID)
+	if !ok {
+		return false
+	}
+	pub, err := protocol.DecodeB64(parent.PubKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	sig, err := protocol.DecodeB64(sigB64)
+	if err != nil {
+		return false
+	}
+	return protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, exp), sig)
 }
 
 func (d *Daemon) liveAskEventLocked() *watchEvent {

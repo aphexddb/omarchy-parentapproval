@@ -40,9 +40,13 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function copyText",
 		".copy-btn",
 		"function startWatch",
+		"function watchOne",
+		"function watchQuery",
+		"function canonicalWatch",
 		"function handleLiveAsk",
 		"function listenLiveAsk",
 		"function ridFromWatchEvent",
+		"OMARCHY-WATCH/1",
 		"/v1/watch",
 		`the request shows here right away`,
 	} {

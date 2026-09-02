@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -125,8 +126,13 @@ type watchEvent struct {
 }
 
 type watchWaiter struct {
-	hosts map[string]bool
-	ch    chan watchEvent
+	hostID string
+	ch     chan watchEvent
+}
+
+type parentPub struct {
+	DeviceID string `json:"device_id"`
+	PubKey   string `json:"pubkey"`
 }
 
 // Server is a single-replica parent-approval relay.
@@ -143,6 +149,7 @@ type Server struct {
 	subs       map[string]map[string]pushSub // host_id -> device_id -> sub
 	expectPush map[string]string             // host_id -> device_id (empty = any)
 	asks       map[string]*liveAsk           // host_id -> latest open ask
+	parents    map[string]map[string]string  // host_id -> device_id -> pubkey
 	watchers   []*watchWaiter
 }
 
@@ -168,12 +175,14 @@ func New(cfg Config) (*Server, error) {
 		subs:       map[string]map[string]pushSub{},
 		expectPush: map[string]string{},
 		asks:       map[string]*liveAsk{},
+		parents:    map[string]map[string]string{},
 	}
 	if err := s.loadVAPID(); err != nil {
 		return nil, err
 	}
 	s.loadTokens()
 	s.loadSubs()
+	s.loadParents()
 	go s.expireLoop()
 	return s, nil
 }
@@ -526,6 +535,10 @@ func (s *Server) handleHostWS(w http.ResponseWriter, r *http.Request) {
 			s.expectPush[h.id] = m.DeviceID
 			s.mu.Unlock()
 			_ = h.send(msg{Op: "ok", ID: m.ID})
+		case "parent":
+			s.handleParentEnroll(h, m)
+		case "revoke-parent":
+			s.handleParentRevoke(h, m)
 		default:
 			log.Printf("relay unknown op %q from %s", m.Op, hostID)
 		}
@@ -673,30 +686,23 @@ func (s *Server) askRID(hostID string) string {
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
-	hostIDs := r.URL.Query()["host_id"]
-	if len(hostIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
-		return
-	}
-	hosts := map[string]bool{}
-	for _, id := range hostIDs {
-		id = strings.TrimSpace(id)
-		if id != "" {
-			hosts[id] = true
+	hostID, ok := s.verifyWatchAuth(r)
+	if !ok {
+		if r.URL.Query().Get("host_id") == "" || r.URL.Query().Get("device_id") == "" || r.URL.Query().Get("sig") == "" || r.URL.Query().Get("exp") == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id, device_id, exp, sig required"})
+			return
 		}
-	}
-	if len(hosts) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
-	waiter := &watchWaiter{hosts: hosts, ch: make(chan watchEvent, 1)}
+	waiter := &watchWaiter{hostID: hostID, ch: make(chan watchEvent, 1)}
 	s.mu.Lock()
 	s.watchers = append(s.watchers, waiter)
 	s.mu.Unlock()
 	defer s.removeWatcher(waiter)
-	if ev := s.liveAskEvent(hosts); ev != nil {
+	if ev := s.liveAskEvent(hostID); ev != nil {
 		writeJSON(w, http.StatusOK, ev)
 		return
 	}
@@ -713,23 +719,51 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) liveAskEvent(hosts map[string]bool) *watchEvent {
+func (s *Server) verifyWatchAuth(r *http.Request) (string, bool) {
+	q := r.URL.Query()
+	hostID := strings.TrimSpace(q.Get("host_id"))
+	deviceID := strings.TrimSpace(q.Get("device_id"))
+	sigB64 := strings.TrimSpace(q.Get("sig"))
+	exp, err := strconv.ParseInt(strings.TrimSpace(q.Get("exp")), 10, 64)
+	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" {
+		return "", false
+	}
+	if !protocol.WatchAuthFresh(exp, time.Now().Unix()) {
+		return "", false
+	}
+	sig, err := protocol.DecodeB64(sigB64)
+	if err != nil {
+		return "", false
+	}
+	s.mu.Lock()
+	pubB64 := ""
+	if byDev := s.parents[hostID]; byDev != nil {
+		pubB64 = byDev[deviceID]
+	}
+	s.mu.Unlock()
+	pub, err := protocol.DecodeB64(pubB64)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return "", false
+	}
+	if !protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, exp), sig) {
+		return "", false
+	}
+	return hostID, true
+}
+
+func (s *Server) liveAskEvent(hostID string) *watchEvent {
 	now := time.Now().Unix()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pub := s.cfg.PublicURL
-	for hid := range hosts {
-		ask := s.asks[hid]
-		if ask == nil || now > ask.Exp || ask.Token == "" {
-			continue
-		}
-		return &watchEvent{
-			Kind: "ask",
-			RID:  ask.RID,
-			URL:  pub + "/p/" + ask.Token,
-		}
+	ask := s.asks[hostID]
+	if ask == nil || now > ask.Exp || ask.Token == "" {
+		return nil
 	}
-	return nil
+	return &watchEvent{
+		Kind: "ask",
+		RID:  ask.RID,
+		URL:  s.cfg.PublicURL + "/p/" + ask.Token,
+	}
 }
 
 func (s *Server) fanoutWatch(hostID string, ev watchEvent) {
@@ -739,7 +773,7 @@ func (s *Server) fanoutWatch(hostID string, ev watchEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, w := range s.watchers {
-		if w == nil || !w.hosts[hostID] {
+		if w == nil || w.hostID != hostID {
 			continue
 		}
 		select {
@@ -747,6 +781,36 @@ func (s *Server) fanoutWatch(hostID string, ev watchEvent) {
 		default:
 		}
 	}
+}
+
+func (s *Server) handleParentEnroll(h *hostConn, m msg) {
+	pub, err := protocol.DecodeB64(m.PubKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize || m.DeviceID == "" {
+		_ = h.send(msg{Op: "error", ID: m.ID, Error: "parent"})
+		return
+	}
+	s.mu.Lock()
+	if s.parents[h.id] == nil {
+		s.parents[h.id] = map[string]string{}
+	}
+	s.parents[h.id][m.DeviceID] = m.PubKey
+	s.mu.Unlock()
+	s.saveParent(h.id, m.DeviceID, m.PubKey)
+	_ = h.send(msg{Op: "ok", ID: m.ID})
+}
+
+func (s *Server) handleParentRevoke(h *hostConn, m msg) {
+	if m.DeviceID == "" {
+		_ = h.send(msg{Op: "error", ID: m.ID, Error: "device_id"})
+		return
+	}
+	s.mu.Lock()
+	if s.parents[h.id] != nil {
+		delete(s.parents[h.id], m.DeviceID)
+	}
+	s.mu.Unlock()
+	s.removeParentFile(h.id, m.DeviceID)
+	_ = h.send(msg{Op: "ok", ID: m.ID})
 }
 
 func (s *Server) removeWatcher(w *watchWaiter) {
@@ -1069,6 +1133,55 @@ func (s *Server) loadSubs() {
 				s.subs[hostID] = map[string]pushSub{}
 			}
 			s.subs[hostID][sub.DeviceID] = sub
+		}
+	}
+}
+
+func (s *Server) saveParent(hostID, deviceID, pubKey string) {
+	dir := filepath.Join(s.cfg.DataDir, "parents", hostID)
+	_ = os.MkdirAll(dir, 0o700)
+	raw, err := json.MarshalIndent(parentPub{DeviceID: deviceID, PubKey: pubKey}, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, deviceID+".json"), raw, 0o600)
+}
+
+func (s *Server) removeParentFile(hostID, deviceID string) {
+	_ = os.Remove(filepath.Join(s.cfg.DataDir, "parents", hostID, deviceID+".json"))
+}
+
+func (s *Server) loadParents() {
+	root := filepath.Join(s.cfg.DataDir, "parents")
+	hosts, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, h := range hosts {
+		if !h.IsDir() {
+			continue
+		}
+		hostID := h.Name()
+		entries, err := os.ReadDir(filepath.Join(root, hostID))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(root, hostID, e.Name()))
+			if err != nil {
+				continue
+			}
+			var rec parentPub
+			if err := json.Unmarshal(raw, &rec); err != nil || rec.DeviceID == "" || rec.PubKey == "" {
+				continue
+			}
+			if s.parents[hostID] == nil {
+				s.parents[hostID] = map[string]string{}
+			}
+			s.parents[hostID][rec.DeviceID] = rec.PubKey
 		}
 	}
 }

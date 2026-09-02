@@ -713,42 +713,64 @@ function sleep(ms, signal) {
   });
 }
 
+function canonicalWatch(hostId, deviceId, exp) {
+  return enc.encode(`OMARCHY-WATCH/1\n${hostId}\n${deviceId}\n${exp}\n`);
+}
+
+function watchQuery(rec) {
+  const exp = Math.floor(Date.now() / 1000) + 60;
+  const sig = b64url(signCanonical(b64urlToBytes(rec.secret), canonicalWatch(rec.host_id, rec.device_id, exp)));
+  return (
+    "host_id=" +
+    encodeURIComponent(rec.host_id) +
+    "&device_id=" +
+    encodeURIComponent(rec.device_id) +
+    "&exp=" +
+    exp +
+    "&sig=" +
+    encodeURIComponent(sig)
+  );
+}
+
 function startWatch(recs) {
   stopWatch();
   if (!recs || !recs.length) return;
-  const hostIds = recs.map((r) => r && r.host_id).filter(Boolean);
-  if (!hostIds.length) return;
+  const paired = recs.filter((r) => r && r.host_id && r.device_id && r.secret);
+  if (!paired.length) return;
   const ac = new AbortController();
   watchAbort = ac;
-  const qs = hostIds.map((id) => "host_id=" + encodeURIComponent(id)).join("&");
-  (async () => {
-    while (!ac.signal.aborted) {
+  for (const rec of paired) {
+    watchOne(rec, ac);
+  }
+}
+
+async function watchOne(rec, ac) {
+  while (!ac.signal.aborted) {
+    try {
+      const res = await fetch("/v1/watch?" + watchQuery(rec), {
+        signal: ac.signal,
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (ac.signal.aborted) return;
+      if (!res.ok) {
+        await sleep(1500, ac.signal);
+        continue;
+      }
+      const ev = await res.json();
+      if (ev && ev.kind === "ask") {
+        await handleLiveAsk(ev);
+        if (!ac.signal.aborted) await sleep(1500, ac.signal);
+      }
+    } catch (err) {
+      if (ac.signal.aborted) return;
       try {
-        const res = await fetch("/v1/watch?" + qs, {
-          signal: ac.signal,
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        });
-        if (ac.signal.aborted) return;
-        if (!res.ok) {
-          await sleep(1500, ac.signal);
-          continue;
-        }
-        const ev = await res.json();
-        if (ev && ev.kind === "ask") {
-          await handleLiveAsk(ev);
-          if (!ac.signal.aborted) await sleep(1500, ac.signal);
-        }
-      } catch (err) {
-        if (ac.signal.aborted) return;
-        try {
-          await sleep(1500, ac.signal);
-        } catch (e) {
-          return;
-        }
+        await sleep(1500, ac.signal);
+      } catch (e) {
+        return;
       }
     }
-  })();
+  }
 }
 
 function ridFromAskURL(url) {

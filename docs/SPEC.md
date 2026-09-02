@@ -57,8 +57,8 @@ The relay looks up which laptop owns `sid`/`rid` (from WSS `open`) and proxies t
 TTL 120s. One outstanding request per user; a new one cancels the old.
 
 After `create`, the laptop sends `notify` on the WSS so the relay web-pushes paired phones.
-An already-open PWA does not wait for that push: it long-polls `GET /v1/watch?host_id=…`
-and the relay (or local `--dev` HTTP) returns the ask as soon as it is opened.
+An already-open PWA does not wait for that push: it long-polls `GET /v1/watch` (signed;
+see below) and the relay (or local `--dev` HTTP) returns the ask as soon as it is opened.
 
 ## Host WSS (`/v1/host`)
 
@@ -70,16 +70,40 @@ Laptop dials outbound. Server `{op:challenge, nonce}` (nonce is 32 random bytes,
 - `{op:expect-push, id, device_id}` laptop is waiting for this phone to enable notifications
 - `{op:push-ready, id, device_id}` → `{op:push-ready, id, ready}` (`device_id` empty = any sub for this host)
 - `{op:subscribed, host_id, device_id}` laptop receives when a phone `POST /push/subscribe`s
+- `{op:parent, device_id, pubkey}` laptop enrolls a paired phone so `/v1/watch` can verify it
+- `{op:revoke-parent, device_id}` drop that phone's watch key
 
 `--dev` without `--relay` still serves local HTTP on `protocol.ListenPort` (17421) with no firewall.
 
 ## Phone watch (`GET /v1/watch`)
 
-The open PWA long-polls with one or more `host_id` query params (the paired
-laptops in IndexedDB). The server holds for ~25s.
+`host_id` is `B64(host pubkey)`, not the machine hostname. Hostnames collide;
+host keys do not. Knowing `host_id` still must not let a stranger watch asks.
+
+The open PWA long-polls one host at a time with a paired-phone signature:
+
+```
+GET /v1/watch?host_id=&device_id=&exp=&sig=
+```
+
+`sig` is Ed25519 over these bytes (trailing newline after every field):
+
+```
+OMARCHY-WATCH/1
+<host_id>
+<device_id>
+<exp unix seconds>
+```
+
+`exp` must be in `(now, now+180]`. The relay verifies against the pubkey the
+laptop enrolled (`{op:parent}`). Local `--dev` HTTP verifies against the
+daemon's stored parent. Missing fields are 400; a bad or unknown key is 401
+and does not wait.
+
+The server holds an authorized poll for ~25s.
 
 - If that host has a live ask: `{kind:"ask", rid, url}` immediately.
-- When an ask is `open`ed (or `notify` arrives) for a watched host, the hold
+- When an ask is `open`ed (or `notify` arrives) for that host, the hold
   returns the same JSON.
 - Otherwise `{kind:"idle"}` and the PWA polls again.
 

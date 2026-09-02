@@ -198,6 +198,7 @@ func (c *relayClient) loop(ctx context.Context) error {
 	c.ready = true
 	c.mu.Unlock()
 	log.Printf("relay connected %s as %s", c.url, c.d.HostID())
+	c.publishParents(conn)
 
 	conn.SetReadLimit(1 << 20)
 	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -379,6 +380,46 @@ func (c *relayClient) PushReady(deviceID string) (bool, error) {
 		return resp.Ready, nil
 	case <-timer.C:
 		return false, errors.New("relay push-ready timeout")
+	}
+}
+
+func (c *relayClient) PublishParent(deviceID, pubKey string) {
+	if c == nil || !c.Ready() || deviceID == "" || pubKey == "" {
+		return
+	}
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = c.writeJSON(conn, relayMsg{Op: "parent", DeviceID: deviceID, PubKey: pubKey})
+}
+
+func (c *relayClient) RevokeParent(deviceID string) {
+	if c == nil || !c.Ready() || deviceID == "" {
+		return
+	}
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = c.writeJSON(conn, relayMsg{Op: "revoke-parent", DeviceID: deviceID})
+}
+
+func (c *relayClient) publishParents(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	for _, p := range c.d.store.ListParents() {
+		if p.DeviceID == "" || p.PubKey == "" {
+			continue
+		}
+		if err := c.writeJSON(conn, relayMsg{Op: "parent", DeviceID: p.DeviceID, PubKey: p.PubKey}); err != nil {
+			return
+		}
 	}
 }
 

@@ -36,6 +36,31 @@ func TestCanonicalVectors(t *testing.T) {
 	}
 }
 
+func TestCanonicalWatchVector(t *testing.T) {
+	got := string(CanonicalWatch(
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"phone-1",
+		1735689660,
+	))
+	want := "OMARCHY-WATCH/1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nphone-1\n1735689660\n"
+	if got != want {
+		t.Fatalf("canonical watch mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestWatchAuthFresh(t *testing.T) {
+	now := int64(1000)
+	if WatchAuthFresh(now, now) || WatchAuthFresh(now-1, now) {
+		t.Fatal("expired watch auth accepted")
+	}
+	if !WatchAuthFresh(now+60, now) {
+		t.Fatal("fresh watch auth rejected")
+	}
+	if WatchAuthFresh(now+WatchAuthMax+1, now) {
+		t.Fatal("over-long watch auth accepted")
+	}
+}
+
 func TestSignVerify(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {

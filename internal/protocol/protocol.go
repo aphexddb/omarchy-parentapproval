@@ -16,10 +16,12 @@ import (
 const (
 	Version         = 1
 	CanonicalPrefix = "OMARCHY-APPROVE/1"
+	WatchPrefix     = "OMARCHY-WATCH/1"
 	DecisionAllow   = "allow"
 	DecisionDeny    = "deny"
 	DefaultAskTTL   = 120
 	DefaultPairTTL  = 600
+	WatchAuthMax    = 180
 	ListenPort      = 17421
 	KidsGroup       = "omarchy-kids"
 	DefaultRelayURL = "https://parentapprovals.com"
@@ -66,6 +68,16 @@ func Canonical(decision, ridHex, nonceB64 string, exp int64, hostIDB64, user, se
 		cmdHashB64,
 	)
 	return []byte(b.String())
+}
+
+// CanonicalWatch is signed by a paired parent phone to subscribe to live asks.
+// host_id is B64(host pubkey), not the hostname. exp is unix seconds.
+func CanonicalWatch(hostID, deviceID string, exp int64) []byte {
+	return []byte(fmt.Sprintf("%s\n%s\n%s\n%d\n", WatchPrefix, hostID, deviceID, exp))
+}
+
+func WatchAuthFresh(exp, now int64) bool {
+	return exp > now && exp <= now+WatchAuthMax
 }
 
 func Sign(priv ed25519.PrivateKey, canonical []byte) []byte {
