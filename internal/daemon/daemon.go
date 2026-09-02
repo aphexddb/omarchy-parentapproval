@@ -36,6 +36,15 @@ const (
 	resultCancel  = "cancel"
 )
 
+// watchHold is how long GET /v1/watch waits for an ask before returning idle.
+var watchHold = 25 * time.Second
+
+type watchEvent struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+	RID  string `json:"rid,omitempty"`
+}
+
 type Config struct {
 	StateDir   string
 	SocketPath string
@@ -65,8 +74,9 @@ type Daemon struct {
 	httpSrv  *http.Server
 	httpAddr string
 
-	sockLn net.Listener
-	relay  *relayClient
+	sockLn   net.Listener
+	relay    *relayClient
+	watchers []chan watchEvent
 }
 
 type pairSession struct {
@@ -809,6 +819,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 	d.writePendingLocked()
 	d.mu.Unlock()
 
+	d.fanoutWatch(watchEvent{Kind: "ask", URL: url, RID: r.RID})
 	if d.relay != nil && via == "relay" {
 		title := "Parent Approval"
 		body := fmt.Sprintf("%s wants to run %s", r.User, r.Cmd)
@@ -1060,6 +1071,9 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 		}
 		d.writeWeb(w, "index.html")
 		return
+	case path == "/v1/watch" && req.Method == http.MethodGet:
+		d.handleWatch(w, req)
+		return
 	case path == "/" || path == "/index.html":
 		d.writeWeb(w, "index.html")
 		return
@@ -1072,6 +1086,97 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		http.NotFound(w, req)
+	}
+}
+
+func (d *Daemon) handleWatch(w http.ResponseWriter, req *http.Request) {
+	hostIDs := req.URL.Query()["host_id"]
+	if len(hostIDs) == 0 {
+		http.Error(w, `{"error":"host_id required"}`, http.StatusBadRequest)
+		return
+	}
+	self := d.HostID()
+	match := false
+	for _, id := range hostIDs {
+		if strings.TrimSpace(id) == self {
+			match = true
+			break
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	if match {
+		if ev := d.liveAskEvent(); ev != nil {
+			writeJSON(w, ev)
+			return
+		}
+	}
+	ch := make(chan watchEvent, 1)
+	if match {
+		d.mu.Lock()
+		d.watchers = append(d.watchers, ch)
+		if ev := d.liveAskEventLocked(); ev != nil {
+			d.mu.Unlock()
+			d.removeWatcher(ch)
+			writeJSON(w, ev)
+			return
+		}
+		d.mu.Unlock()
+		defer d.removeWatcher(ch)
+	}
+
+	timer := time.NewTimer(watchHold)
+	defer timer.Stop()
+	select {
+	case ev := <-ch:
+		writeJSON(w, ev)
+	case <-req.Context().Done():
+		return
+	case <-timer.C:
+		writeJSON(w, watchEvent{Kind: "idle"})
+	}
+}
+
+func (d *Daemon) liveAskEvent() *watchEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.liveAskEventLocked()
+}
+
+func (d *Daemon) liveAskEventLocked() *watchEvent {
+	now := time.Now()
+	for _, r := range d.requests {
+		if r == nil || r.Result != "" || now.After(r.Exp) {
+			continue
+		}
+		url := r.QRURL
+		if url == "" {
+			url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+		}
+		return &watchEvent{Kind: "ask", URL: url, RID: r.RID}
+	}
+	return nil
+}
+
+func (d *Daemon) fanoutWatch(ev watchEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, ch := range d.watchers {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+func (d *Daemon) removeWatcher(ch chan watchEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, x := range d.watchers {
+		if x == ch {
+			d.watchers = append(d.watchers[:i], d.watchers[i+1:]...)
+			return
+		}
 	}
 }
 

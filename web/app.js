@@ -394,6 +394,9 @@ function showNotifySetup(recs) {
 }
 
 let idleTimer = 0;
+let watchAbort = null;
+let lastAskRid = "";
+let approveTimer = 0;
 
 function clearIdleTimer() {
   if (idleTimer) {
@@ -438,8 +441,8 @@ function wireHomeNotify(rec) {
   const granted = notificationsGranted();
   if (hint) {
     hint.textContent = granted
-      ? "You'll get a buzz when a kid needs permission."
-      : "Enable notifications so this phone can buzz.";
+      ? "If this page is open, the request shows here right away. You'll also get a buzz."
+      : "Enable notifications so this phone can buzz when the page is closed.";
   }
   if (row) row.classList.toggle("hidden", granted);
   if (!btn || granted) return;
@@ -474,6 +477,7 @@ function showIdle(recs) {
   if (notificationsGranted()) {
     enableNotifications(rec.host_id, rec.device_id, null).catch(() => {});
   }
+  startWatch(recs);
 }
 
 function showDecision(decision) {
@@ -513,6 +517,7 @@ function maybeResumeIdle() {
 async function resumePaired() {
   settleHomeURL();
   const recs = await hydrateRecords();
+  if (recs && recs.length) startWatch(recs);
   if (isStandalone() && !notificationsGranted()) {
     showNotifySetup(recs);
     return;
@@ -527,6 +532,7 @@ async function resumePaired() {
 async function boot() {
   clearIdleTimer();
   registerSW();
+  listenLiveAsk();
   const path = location.pathname.replace(/\/+$/, "");
   if (!hasSign()) {
     show("unsupported");
@@ -625,6 +631,7 @@ async function waitForPair(sid, deviceId) {
 
 async function finishPair(sid, rec) {
   await postHandoff(rec);
+  startWatch([rec]);
   $("paired-host").textContent = rec.host_name || "this laptop";
   if (isStandalone()) {
     showNotifySetup([rec]);
@@ -684,8 +691,137 @@ async function bootPair(sid) {
   };
 }
 
+function stopWatch() {
+  if (!watchAbort) return;
+  watchAbort.abort();
+  watchAbort = null;
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    if (!signal) return;
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function startWatch(recs) {
+  stopWatch();
+  if (!recs || !recs.length) return;
+  const hostIds = recs.map((r) => r && r.host_id).filter(Boolean);
+  if (!hostIds.length) return;
+  const ac = new AbortController();
+  watchAbort = ac;
+  const qs = hostIds.map((id) => "host_id=" + encodeURIComponent(id)).join("&");
+  (async () => {
+    while (!ac.signal.aborted) {
+      try {
+        const res = await fetch("/v1/watch?" + qs, {
+          signal: ac.signal,
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        if (ac.signal.aborted) return;
+        if (!res.ok) {
+          await sleep(1500, ac.signal);
+          continue;
+        }
+        const ev = await res.json();
+        if (ev && ev.kind === "ask") {
+          await handleLiveAsk(ev);
+          if (!ac.signal.aborted) await sleep(1500, ac.signal);
+        }
+      } catch (err) {
+        if (ac.signal.aborted) return;
+        try {
+          await sleep(1500, ac.signal);
+        } catch (e) {
+          return;
+        }
+      }
+    }
+  })();
+}
+
+function ridFromAskURL(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url, location.origin);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (path.startsWith("/a/")) return path.slice("/a/".length);
+    return "";
+  } catch (e) {
+    return "";
+  }
+}
+
+async function ridFromWatchEvent(ev) {
+  if (!ev) return "";
+  if (ev.rid) return ev.rid;
+  const direct = ridFromAskURL(ev.url);
+  if (direct) return direct;
+  if (!ev.url) return "";
+  try {
+    const u = new URL(ev.url, location.origin);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (!path.startsWith("/p/")) return "";
+    const token = path.slice("/p/".length);
+    if (!token) return "";
+    const meta = await fetch("/p/" + token + "/meta", { headers: { Accept: "application/json" } });
+    if (!meta.ok) return "";
+    const m = await meta.json();
+    return m.rid || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function canInterruptForAsk() {
+  const open = openSection();
+  if (!open) return true;
+  if (open.id === "pair" || open.id === "pair-wait" || open.id === "a2hs" || open.id === "unsupported") {
+    return false;
+  }
+  return true;
+}
+
+async function handleLiveAsk(ev) {
+  const rid = await ridFromWatchEvent(ev);
+  if (!rid || rid === lastAskRid) return;
+  if (!canInterruptForAsk()) return;
+  lastAskRid = rid;
+  history.replaceState({}, "", "/a/" + rid);
+  await bootApprove(rid);
+}
+
+function listenLiveAsk() {
+  if (!("serviceWorker" in navigator) || listenLiveAsk.wired) return;
+  listenLiveAsk.wired = true;
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    const data = (e && e.data) || {};
+    if (data.type === "ask" || data.kind === "ask") {
+      handleLiveAsk({ kind: "ask", url: data.url, rid: data.rid });
+    }
+  });
+}
+
 async function bootApprove(rid) {
   clearIdleTimer();
+  if (approveTimer) {
+    clearInterval(approveTimer);
+    approveTimer = 0;
+  }
+  lastAskRid = rid;
+  const recs = await hydrateRecords().catch(() => []);
+  if (recs && recs.length) startWatch(recs);
   show("approve");
   $("approve-btn").disabled = false;
   $("deny-btn").disabled = false;
@@ -710,7 +846,6 @@ async function bootApprove(rid) {
     $("deny-btn").disabled = true;
     return;
   }
-  await hydrateRecords();
   const rec = await loadRecord(req.host_id);
   if (!rec) {
     $("unpaired").classList.remove("hidden");
@@ -718,20 +853,19 @@ async function bootApprove(rid) {
     $("actions").classList.add("hidden");
     return;
   }
-  let iv = 0;
   const tick = () => {
     const left = Math.max(0, req.exp - Math.floor(Date.now() / 1000));
     $("countdown").textContent = left + "s left";
     if (left <= 0) {
-      if (iv) clearInterval(iv);
-      iv = 0;
+      if (approveTimer) clearInterval(approveTimer);
+      approveTimer = 0;
       showGone();
       return true;
     }
     return false;
   };
   if (tick()) return;
-  iv = setInterval(tick, 250);
+  approveTimer = setInterval(tick, 250);
 
   const decide = async (decision) => {
     $("approve-btn").disabled = true;
@@ -750,8 +884,8 @@ async function bootApprove(rid) {
         }),
       });
       if (!posted.ok) throw new Error(await posted.text());
-      if (iv) clearInterval(iv);
-      iv = 0;
+      if (approveTimer) clearInterval(approveTimer);
+      approveTimer = 0;
       showDecision(decision);
     } catch (err) {
       banner($("approve-err"), "err", err.message || String(err));
@@ -769,5 +903,11 @@ window.addEventListener("pageshow", (e) => {
 });
 window.addEventListener("focus", maybeResumeIdle);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") maybeResumeIdle();
+  if (document.visibilityState !== "visible") return;
+  maybeResumeIdle();
+  hydrateRecords()
+    .then((recs) => {
+      if (recs && recs.length) startWatch(recs);
+    })
+    .catch(() => {});
 });

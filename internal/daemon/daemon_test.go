@@ -983,3 +983,124 @@ func TestWaitPushAnySubForHost(t *testing.T) {
 		t.Fatal("wait-push timed out")
 	}
 }
+
+func waitHTTP(t *testing.T, d *Daemon) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d.mu.Lock()
+		addr := d.httpAddr
+		d.mu.Unlock()
+		if addr != "" {
+			return d.BaseURL()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("http not ready")
+	return ""
+}
+
+func TestWatchRequiresHostID(t *testing.T) {
+	d, _ := startTestDaemon(t)
+	base := waitHTTP(t, d)
+	res, err := http.Get(base + "/v1/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %s", res.Status)
+	}
+}
+
+func TestWatchReturnsLiveAskImmediately(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	enrollParent(t, d)
+	created, err := Create(sock, "milo", "sudo", "/", "true", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, _ := created["rid"].(string)
+	base := waitHTTP(t, d)
+	res, err := http.Get(base + "/v1/watch?host_id=" + d.HostID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("watch %s %s", res.Status, b)
+	}
+	var ev watchEvent
+	if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "ask" || ev.RID != rid {
+		t.Fatalf("event %+v want rid %s", ev, rid)
+	}
+	if ev.URL == "" || !strings.Contains(ev.URL, "/a/"+rid) {
+		t.Fatalf("url %s", ev.URL)
+	}
+}
+
+func TestWatchUnblocksWhenAskCreated(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	enrollParent(t, d)
+	base := waitHTTP(t, d)
+
+	done := make(chan watchEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := http.Get(base + "/v1/watch?host_id=" + d.HostID())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer res.Body.Close()
+		var ev watchEvent
+		if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	created, err := Create(sock, "milo", "sudo", "/", "pacman -S cowsay", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, _ := created["rid"].(string)
+
+	select {
+	case ev := <-done:
+		if ev.Kind != "ask" || ev.RID != rid {
+			t.Fatalf("event %+v want %s", ev, rid)
+		}
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not unblock when ask was created")
+	}
+}
+
+func TestWatchIdleWrongHost(t *testing.T) {
+	d, _ := startTestDaemon(t)
+	base := waitHTTP(t, d)
+	prev := watchHold
+	watchHold = 40 * time.Millisecond
+	t.Cleanup(func() { watchHold = prev })
+
+	res, err := http.Get(base + "/v1/watch?host_id=not-this-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var ev watchEvent
+	if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "idle" {
+		t.Fatalf("event %+v", ev)
+	}
+}

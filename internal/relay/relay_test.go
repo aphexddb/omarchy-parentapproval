@@ -523,3 +523,162 @@ func TestHandoffAndPairManifest(t *testing.T) {
 		t.Fatalf("handoff %+v", rec)
 	}
 }
+
+func TestWatchRequiresHostID(t *testing.T) {
+	_, ts := newTestRelay(t)
+	res, err := http.Get(ts.URL + "/v1/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %s", res.Status)
+	}
+}
+
+func TestWatchReturnsLiveAskImmediately(t *testing.T) {
+	_, ts := newTestRelay(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, priv, pub)
+	if err := conn.WriteJSON(msg{Op: "open", ID: "1", Kind: "ask", RID: "rid-live"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var opened msg
+	if err := conn.ReadJSON(&opened); err != nil {
+		t.Fatal(err)
+	}
+	if opened.Op != "opened" || opened.Token == "" {
+		t.Fatalf("opened %+v", opened)
+	}
+
+	res, err := http.Get(ts.URL + "/v1/watch?host_id=" + protocol.B64(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("watch %s", res.Status)
+	}
+	var ev watchEvent
+	if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "ask" || ev.RID != "rid-live" {
+		t.Fatalf("event %+v", ev)
+	}
+	if ev.URL != ts.URL+"/p/"+opened.Token {
+		t.Fatalf("url %s want %s/p/%s", ev.URL, ts.URL, opened.Token)
+	}
+}
+
+func TestWatchUnblocksWhenAskOpens(t *testing.T) {
+	_, ts := newTestRelay(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, priv, pub)
+	hostID := protocol.B64(pub)
+
+	done := make(chan watchEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := http.Get(ts.URL + "/v1/watch?host_id=" + hostID)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer res.Body.Close()
+		var ev watchEvent
+		if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if err := conn.WriteJSON(msg{Op: "open", ID: "1", Kind: "ask", RID: "rid-now"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var opened msg
+	if err := conn.ReadJSON(&opened); err != nil {
+		t.Fatal(err)
+	}
+	if opened.Op != "opened" {
+		t.Fatalf("opened %+v", opened)
+	}
+
+	select {
+	case ev := <-done:
+		if ev.Kind != "ask" || ev.RID != "rid-now" {
+			t.Fatalf("event %+v", ev)
+		}
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not unblock when ask opened")
+	}
+}
+
+func TestWatchIdleWhenNoAsk(t *testing.T) {
+	prev := watchHold
+	watchHold = 40 * time.Millisecond
+	t.Cleanup(func() { watchHold = prev })
+
+	_, ts := newTestRelay(t)
+	res, err := http.Get(ts.URL + "/v1/watch?host_id=unknown-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("watch %s", res.Status)
+	}
+	var ev watchEvent
+	if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "idle" {
+		t.Fatalf("event %+v", ev)
+	}
+}
+
+func TestWatchIgnoresOtherHost(t *testing.T) {
+	_, ts := newTestRelay(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialHost(t, ts, priv, pub)
+	if err := conn.WriteJSON(msg{Op: "open", ID: "1", Kind: "ask", RID: "rid-other"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var opened msg
+	if err := conn.ReadJSON(&opened); err != nil {
+		t.Fatal(err)
+	}
+
+	prev := watchHold
+	watchHold = 40 * time.Millisecond
+	t.Cleanup(func() { watchHold = prev })
+
+	res, err := http.Get(ts.URL + "/v1/watch?host_id=not-this-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var ev watchEvent
+	if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "idle" {
+		t.Fatalf("should not see other host ask: %+v", ev)
+	}
+}

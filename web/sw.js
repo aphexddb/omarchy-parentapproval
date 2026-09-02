@@ -24,9 +24,22 @@ self.addEventListener("push", (event) => {
     }
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || "Parent Approval", {
-      body: data.body || "A kid needs sudo",
-      data: { url: data.url || "/" },
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      let visible = false;
+      const payload = { type: "ask", url: data.url || "/", title: data.title, body: data.body };
+      for (const client of windows) {
+        try {
+          client.postMessage(payload);
+        } catch (e) {
+          /* ignore */
+        }
+        if (client.visibilityState === "visible" || client.focused) visible = true;
+      }
+      if (visible) return;
+      return self.registration.showNotification(data.title || "Parent Approval", {
+        body: data.body || "A kid needs sudo",
+        data: { url: data.url || "/" },
+      });
     })
   );
 });

@@ -37,9 +37,14 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"display-mode: fullscreen",
 		"history.replaceState",
 		"listRecords()",
-		`You'll get a buzz when a kid needs permission.`,
 		"function copyText",
 		".copy-btn",
+		"function startWatch",
+		"function handleLiveAsk",
+		"function listenLiveAsk",
+		"function ridFromWatchEvent",
+		"/v1/watch",
+		`the request shows here right away`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("app.js missing %q", want)
@@ -63,6 +68,7 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`Get started`,
 		`curl -fsSL https://parentapprovals.com/install | bash`,
 		`class="copy-btn"`,
+		`the request shows here right away`,
 	} {
 		if !strings.Contains(htmlS, want) {
 			t.Errorf("index.html missing %q", want)
@@ -77,6 +83,20 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	}
 	if !strings.Contains(string(man), `/?homescreen=1`) {
 		t.Error("manifest start_url should mark Home Screen launches")
+	}
+	sw, err := FS.ReadFile("sw.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	swS := string(sw)
+	for _, want := range []string{
+		`client.postMessage(payload)`,
+		`visibilityState === "visible"`,
+		`type: "ask"`,
+	} {
+		if !strings.Contains(swS, want) {
+			t.Errorf("sw.js missing %q", want)
+		}
 	}
 	inst, err := FS.ReadFile("install")
 	if err != nil {

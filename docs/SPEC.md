@@ -57,6 +57,8 @@ The relay looks up which laptop owns `sid`/`rid` (from WSS `open`) and proxies t
 TTL 120s. One outstanding request per user; a new one cancels the old.
 
 After `create`, the laptop sends `notify` on the WSS so the relay web-pushes paired phones.
+An already-open PWA does not wait for that push: it long-polls `GET /v1/watch?host_id=…`
+and the relay (or local `--dev` HTTP) returns the ask as soon as it is opened.
 
 ## Host WSS (`/v1/host`)
 
@@ -70,6 +72,23 @@ Laptop dials outbound. Server `{op:challenge, nonce}` (nonce is 32 random bytes,
 - `{op:subscribed, host_id, device_id}` laptop receives when a phone `POST /push/subscribe`s
 
 `--dev` without `--relay` still serves local HTTP on `protocol.ListenPort` (17421) with no firewall.
+
+## Phone watch (`GET /v1/watch`)
+
+The open PWA long-polls with one or more `host_id` query params (the paired
+laptops in IndexedDB). The server holds for ~25s.
+
+- If that host has a live ask: `{kind:"ask", rid, url}` immediately.
+- When an ask is `open`ed (or `notify` arrives) for a watched host, the hold
+  returns the same JSON.
+- Otherwise `{kind:"idle"}` and the PWA polls again.
+
+`url` is the pairing-token page (`/p/{token}`) on the relay, or `/a/{rid}`
+on local `--dev` HTTP. The page then loads `GET /a/{rid}` as usual.
+
+Push still fires for a closed or backgrounded phone. If a visible window is
+already open, the service worker `postMessage`s the ask URL and skips the
+OS notification.
 
 ## PAM
 

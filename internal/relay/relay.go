@@ -30,6 +30,10 @@ const (
 	askTTL  = protocol.DefaultAskTTL
 )
 
+// watchHold is how long GET /v1/watch waits for an ask before returning idle.
+// Tests shrink this so an idle poll does not sit for 25s.
+var watchHold = 25 * time.Second
+
 type Config struct {
 	PublicURL string
 	DataDir   string
@@ -104,6 +108,27 @@ type hostConn struct {
 	pending map[string]chan *rpcRes
 }
 
+// liveAsk is the latest open ask token for a host, so an already-open PWA
+// can render it without waiting for web-push.
+type liveAsk struct {
+	RID   string
+	Token string
+	Exp   int64
+}
+
+type watchEvent struct {
+	Kind  string `json:"kind"`
+	URL   string `json:"url,omitempty"`
+	RID   string `json:"rid,omitempty"`
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
+}
+
+type watchWaiter struct {
+	hosts map[string]bool
+	ch    chan watchEvent
+}
+
 // Server is a single-replica parent-approval relay.
 type Server struct {
 	cfg   Config
@@ -117,6 +142,8 @@ type Server struct {
 	pairOf     map[string]string             // host_id -> live pair sid
 	subs       map[string]map[string]pushSub // host_id -> device_id -> sub
 	expectPush map[string]string             // host_id -> device_id (empty = any)
+	asks       map[string]*liveAsk           // host_id -> latest open ask
+	watchers   []*watchWaiter
 }
 
 var upgrader = websocket.Upgrader{
@@ -140,6 +167,7 @@ func New(cfg Config) (*Server, error) {
 		pairOf:     map[string]string{},
 		subs:       map[string]map[string]pushSub{},
 		expectPush: map[string]string{},
+		asks:       map[string]*liveAsk{},
 	}
 	if err := s.loadVAPID(); err != nil {
 		return nil, err
@@ -188,6 +216,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"publicKey": s.vapid.PublicKey})
 	case path == "/v1/host":
 		s.handleHostWS(w, r)
+	case path == "/v1/watch" && r.Method == http.MethodGet:
+		s.handleWatch(w, r)
 	case path == "/push/subscribe" && r.Method == http.MethodPost:
 		s.handleSubscribe(w, r)
 	case strings.HasPrefix(path, "/p/") && strings.HasSuffix(path, "/meta") && r.Method == http.MethodGet:
@@ -547,8 +577,18 @@ func (s *Server) handleOpen(h *hostConn, m msg) {
 		s.rids[m.RID] = h.id
 	}
 	s.tokens[tok] = rec
+	if kind == "ask" {
+		s.asks[h.id] = &liveAsk{RID: m.RID, Token: tok, Exp: rec.Exp}
+	}
 	s.mu.Unlock()
 	s.saveToken(rec)
+	if kind == "ask" {
+		s.fanoutWatch(h.id, watchEvent{
+			Kind: "ask",
+			RID:  m.RID,
+			URL:  s.publicURL() + "/p/" + tok,
+		})
+	}
 	if err := h.send(msg{Op: "opened", ID: m.ID, Token: tok}); err != nil {
 		log.Printf("relay open reply: %v", err)
 	}
@@ -559,6 +599,13 @@ func (s *Server) handleNotify(m msg) {
 	if hostID == "" {
 		return
 	}
+	s.fanoutWatch(hostID, watchEvent{
+		Kind:  "ask",
+		URL:   m.URL,
+		RID:   s.askRID(hostID),
+		Title: m.Title,
+		Body:  m.Body,
+	})
 	payload, _ := json.Marshal(map[string]string{
 		"title": m.Title,
 		"body":  m.Body,
@@ -607,6 +654,109 @@ func (s *Server) pushOne(hostID string, sub pushSub, payload []byte) {
 	} else if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		log.Printf("relay push %s/%s: HTTP %s %s", hostID, sub.DeviceID, resp.Status, bytes.TrimSpace(body))
+	}
+}
+
+func (s *Server) publicURL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.PublicURL
+}
+
+func (s *Server) askRID(hostID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ask := s.asks[hostID]; ask != nil {
+		return ask.RID
+	}
+	return ""
+}
+
+func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
+	hostIDs := r.URL.Query()["host_id"]
+	if len(hostIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
+		return
+	}
+	hosts := map[string]bool{}
+	for _, id := range hostIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			hosts[id] = true
+		}
+	}
+	if len(hosts) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id required"})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	waiter := &watchWaiter{hosts: hosts, ch: make(chan watchEvent, 1)}
+	s.mu.Lock()
+	s.watchers = append(s.watchers, waiter)
+	s.mu.Unlock()
+	defer s.removeWatcher(waiter)
+	if ev := s.liveAskEvent(hosts); ev != nil {
+		writeJSON(w, http.StatusOK, ev)
+		return
+	}
+
+	timer := time.NewTimer(watchHold)
+	defer timer.Stop()
+	select {
+	case ev := <-waiter.ch:
+		writeJSON(w, http.StatusOK, ev)
+	case <-r.Context().Done():
+		return
+	case <-timer.C:
+		writeJSON(w, http.StatusOK, watchEvent{Kind: "idle"})
+	}
+}
+
+func (s *Server) liveAskEvent(hosts map[string]bool) *watchEvent {
+	now := time.Now().Unix()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pub := s.cfg.PublicURL
+	for hid := range hosts {
+		ask := s.asks[hid]
+		if ask == nil || now > ask.Exp || ask.Token == "" {
+			continue
+		}
+		return &watchEvent{
+			Kind: "ask",
+			RID:  ask.RID,
+			URL:  pub + "/p/" + ask.Token,
+		}
+	}
+	return nil
+}
+
+func (s *Server) fanoutWatch(hostID string, ev watchEvent) {
+	if hostID == "" || ev.Kind == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, w := range s.watchers {
+		if w == nil || !w.hosts[hostID] {
+			continue
+		}
+		select {
+		case w.ch <- ev:
+		default:
+		}
+	}
+}
+
+func (s *Server) removeWatcher(w *watchWaiter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, x := range s.watchers {
+		if x == w {
+			s.watchers = append(s.watchers[:i], s.watchers[i+1:]...)
+			return
+		}
 	}
 }
 
@@ -778,6 +928,11 @@ func (s *Server) expire() {
 		if rec.RID != "" && s.rids[rec.RID] == rec.HostID {
 			delete(s.rids, rec.RID)
 		}
+		if rec.Kind == "ask" {
+			if live := s.asks[rec.HostID]; live != nil && live.RID == rec.RID {
+				delete(s.asks, rec.HostID)
+			}
+		}
 		if rec.Kind == "pair" && s.pairOf[rec.HostID] == rec.SID {
 			delete(s.pairOf, rec.HostID)
 		}
@@ -857,6 +1012,9 @@ func (s *Server) loadTokens() {
 		}
 		if rec.RID != "" {
 			s.rids[rec.RID] = rec.HostID
+			if rec.Kind == "ask" {
+				s.asks[rec.HostID] = &liveAsk{RID: rec.RID, Token: rec.Token, Exp: rec.Exp}
+			}
 		}
 	}
 }
