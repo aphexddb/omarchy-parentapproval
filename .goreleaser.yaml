@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: parentapproval
+
+before:
+  hooks:
+    # Second arg is .IsSnapshot; snapshots must not rewrite VERSION/PKGBUILD.
+    - ./scripts/stamp-version {{ .Version }} {{ .IsSnapshot }}
+
+builds:
+  - id: parentapproval
+    main: ./cmd/parentapproval
+    binary: parentapproval
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+
+  - id: parentapproval-relay
+    main: ./cmd/parentapproval-relay
+    binary: parentapproval-relay
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: parentapproval
+    ids:
+      - parentapproval
+    formats:
+      - tar.gz
+    name_template: "parentapproval_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Flat archive so the AUR package() paths resolve in $srcdir.
+    wrap_in_directory: false
+    files:
+      - LICENSE
+      - README.md
+      - AGENTS.md
+      - VERSION
+      - packaging/parentapprovald.service
+      - packaging/parentapproval.sysusers
+      - packaging/omarchy-kids.sudoers
+      - overlay/manifest.json
+      - overlay/Panel.qml
+      - default/agents/skills/parentapproval/SKILL.md
+
+  - id: parentapproval-relay
+    ids:
+      - parentapproval-relay
+    formats:
+      - tar.gz
+    name_template: "parentapproval-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    files:
+      - LICENSE
+      - README.md
+
+# Binary AUR package (parentapproval-bin). In-tree PKGBUILD stays a source
+# checkout recipe for ./scripts/dev-install and is not uploaded to AUR.
+aurs:
+  - name: parentapproval-bin
+    ids:
+      - parentapproval
+    homepage: https://github.com/aphexddb/omarchy-parentapproval
+    description: Parent-phone approval for Omarchy kids accounts
+    license: MIT
+    maintainers:
+      - "Gardiner Allen <aphexddb@gmail.com>"
+    depends:
+      - pam
+      - sudo
+    optdepends:
+      - "imv: fullscreen QR on Wayland when the overlay plugin is not installed"
+    provides:
+      - parentapproval
+    conflicts:
+      - parentapproval
+      - omarchy-parentapproval
+    backup:
+      - etc/sudoers.d/omarchy-kids
+    install: packaging/parentapproval.install
+    package: |-
+      install -Dm755 "./parentapproval" "${pkgdir}/usr/bin/parentapproval"
+      install -Dm644 "./packaging/parentapprovald.service" "${pkgdir}/usr/lib/systemd/system/parentapprovald.service"
+      install -Dm644 "./packaging/parentapproval.sysusers" "${pkgdir}/usr/lib/sysusers.d/parentapproval.conf"
+      install -d -m 750 "${pkgdir}/etc/sudoers.d"
+      install -m 440 "./packaging/omarchy-kids.sudoers" "${pkgdir}/etc/sudoers.d/omarchy-kids"
+      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/parentapproval/LICENSE"
+      install -Dm644 "./README.md" "${pkgdir}/usr/share/doc/parentapproval/README.md"
+      install -Dm644 "./AGENTS.md" "${pkgdir}/usr/share/doc/parentapproval/AGENTS.md"
+      install -Dm644 "./VERSION" "${pkgdir}/usr/share/parentapproval/VERSION"
+      install -Dm644 "./default/agents/skills/parentapproval/SKILL.md" \
+        "${pkgdir}/usr/share/parentapproval/agents/skills/parentapproval/SKILL.md"
+      install -Dm644 "./overlay/manifest.json" "${pkgdir}/usr/share/parentapproval/overlay/manifest.json"
+      install -Dm644 "./overlay/Panel.qml" "${pkgdir}/usr/share/parentapproval/overlay/Panel.qml"
+    git_url: ssh://aur@aur.archlinux.org/parentapproval-bin.git
+    private_key: '{{ index .Env "AUR_KEY" }}'
+    # Upload only on a real tag when AUR_KEY is set. auto skips prereleases.
+    skip_upload: '{{ if and (not .IsSnapshot) (index .Env "AUR_KEY") }}auto{{ else }}true{{ end }}'
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  prerelease: auto

@@ -19,6 +19,7 @@ Item {
   property string sid: ""
   property string pairState: ""
   property string pairName: ""
+  property string typedSas: ""
   property bool pairBusy: false
   property var qrRows: []
   property int qrSize: 0
@@ -71,6 +72,7 @@ Item {
     root.sid = ""
     root.pairState = ""
     root.pairName = ""
+    root.typedSas = ""
     root.pairBusy = false
     root.error = ""
     root.verdict = ""
@@ -96,10 +98,19 @@ Item {
 
   function confirmPair() {
     if (root.pairBusy || root.pairState !== "pending_confirm") return
+    var code = String(root.typedSas || "").replace(/\s/g, "")
+    if (code.length !== 6) {
+      root.error = "Type the 6-digit code from the phone"
+      return
+    }
+    if (root.match && code !== String(root.match)) {
+      root.error = "That code does not match this phone's key"
+      return
+    }
     root.pairBusy = true
     confirmProc.command = root.sid
-      ? ["/usr/bin/parentapproval", "pair-confirm", root.sid]
-      : ["/usr/bin/parentapproval", "pair-confirm"]
+      ? ["/usr/bin/parentapproval", "pair-confirm", root.sid, code]
+      : ["/usr/bin/parentapproval", "pair-confirm", code]
     confirmProc.running = true
   }
 
@@ -155,6 +166,7 @@ Item {
             root.pairState = data.state || "waiting"
             root.pairName = data.name || ""
             root.match = data.match || ""
+            if (root.pairState !== "pending_confirm") root.typedSas = ""
             root.qrRows = data.matrix || []
             root.qrSize = root.qrRows.length
             root.error = ""
@@ -215,13 +227,25 @@ Item {
       focus: true
       Keys.onPressed: function(event) {
         if (root.pairing && root.pairState === "pending_confirm" && !root.pairBusy) {
-          if (event.key === Qt.Key_Y || event.key === Qt.Key_Return) {
+          if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) {
+            root.abortPair()
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_Backspace) {
+            root.typedSas = String(root.typedSas).slice(0, -1)
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.confirmPair()
             event.accepted = true
             return
           }
-          if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) {
-            root.abortPair()
+          var digit = event.text
+          if (digit && /^[0-9]$/.test(digit) && String(root.typedSas).length < 6) {
+            root.typedSas += digit
+            root.error = ""
             event.accepted = true
             return
           }
@@ -248,7 +272,7 @@ Item {
 
         Text {
           text: root.pairing
-            ? (root.pairState === "pending_confirm" ? "SAME CODE?" : "SCAN TO PAIR")
+            ? (root.pairState === "pending_confirm" ? "TYPE THE PHONE CODE" : "SCAN TO PAIR")
             : ((root.user || "Kid").toUpperCase() + " WANTS TO RUN")
           color: root.onScrimDim
           font.family: root.fontFamily
@@ -325,7 +349,11 @@ Item {
         }
 
         Text {
-          text: (root.pairing ? "CODE  " : "MATCH  ") + (root.match || "•••")
+          text: root.pairing
+            ? (root.pairState === "pending_confirm"
+                ? ("YOU TYPED  " + (root.typedSas ? String(root.typedSas).split("").join(" ") : "• • • • • •"))
+                : "CODE appears after the phone offers its key")
+            : ("MATCH  " + (root.match || "•••"))
           color: "#f5c542"
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -336,8 +364,8 @@ Item {
         Text {
           text: root.pairing
             ? (root.pairState === "pending_confirm"
-                ? "If the phone shows this code, confirm. This is not a password."
-                : "The phone must show the same code. This is not a password.")
+                ? "Type the 6 digits shown on that phone. A Y keystroke will not confirm."
+                : "The phone must show the same key-bound code. This is not a password.")
             : "Approve on a paired parent phone. This is not a password."
           color: root.onScrimDim
           font.family: root.fontFamily
@@ -381,10 +409,10 @@ Item {
             height: Style.space(48)
             radius: Style.cornerRadius
             color: "#3dd68c"
-            opacity: root.pairBusy ? 0.45 : 1
+            opacity: (root.pairBusy || String(root.typedSas).length !== 6) ? 0.45 : 1
             MouseArea {
               anchors.fill: parent
-              enabled: !root.pairBusy
+              enabled: !root.pairBusy && String(root.typedSas).length === 6
               onClicked: root.confirmPair()
             }
             Text {

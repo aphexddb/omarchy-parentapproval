@@ -21,7 +21,7 @@ parentapproval ask --cmd "pacman -S cowsay"
 
 ## How it works
 
-1. **You pair once**, sitting at the laptop. Scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. Both screens show the same 6-digit code; confirm it on the phone so a stranger cannot swap in their own key.    
+1. **You pair once**, sitting at the laptop. Scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. The 6-digit code is derived from that key — a swapped key changes the digits. Confirm the code on the phone (or type those digits on the laptop overlay). The offering phone's name is shown so you can see whose key you are about to enroll.    
 2. **Add the page to Home Screen, tap Allow notifications.** `parentapproval pair` waits until notifications are on, then exits. After that the phone is a parent for this machine.
 3. **The kid hits sudo** (or a polkit prompt: pkexec, disks, package installs). They are in the `omarchy-kids` group, so PAM does not accept their login password. Login itself never phones a parent. The laptop asks the relay to notify paired phones.
 4. **Your phone buzzes.** Check the command and the match code, tap Approve. The phone signs the request the daemon already knows. One invocation, then it is spent. Replay is refuse.
@@ -79,12 +79,21 @@ omarchy plugin add "$PWD/overlay"
 
 ## Relay
 
-Default origin: **https://parentapprovals.com**. Self-hosters set:
+Default origin: **https://parentapprovals.com**. That origin is the phone's
+**code trust root**: it serves the PWA that holds the parent private key.
+A compromised relay can exfiltrate the key or silently sign an allow. The
+cryptographic core still stops a compromised *laptop* and a passive network.
+High-assurance families should self-host. See [`docs/trust-model.md`](docs/trust-model.md).
+
+Self-hosters set:
 
 - Laptop: `OMARCHY_PARENTAPPROVAL_RELAY` or `parentapproval daemon --relay URL`
 - Relay process: `RELAY_PUBLIC_URL` (or `PUBLIC_URL`) and `RELAY_DATA` (default `/data`)
 
 `--relay=off` is local-only HTTP (`--dev`). Production does not open a LAN listen port.
+
+`nacl.min.js` and `sha256.min.js` are Subresource Integrity pinned. Release
+hashes are in [`docs/web-assets.md`](docs/web-assets.md).
 
 See [`deploy/relay/README.md`](deploy/relay/README.md) for Railway and optional Caddy compose. Do not terminate TLS in the relay container.
 
@@ -125,11 +134,25 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 | `sudo parentapproval disable` | Remove PAM hooks without uninstalling |
 | `parentapproval status` | Host id, relay, paired phones |
 | `sudo parentapproval revoke DEVICE_ID` | Drop a phone |
-| `sudo parentapproval doctor` | Check PAM order, daemon, relay |
+| `sudo parentapproval doctor` | Check PAM order (including FIDO/fingerprint sufficient lines), daemon, relay |
 | `sudo parentapproval install-skills` | Symlink the agent skill (parent + all kids) |
 | `parentapproval daemon [--dev] [--relay URL]` | The service |
 
 `parentapproval --help` is the flag-level source of truth.
+
+## Releases
+
+[SemVer 2.0](https://semver.org/) tags (`vMAJOR.MINOR.PATCH`). Linux **amd64** and **arm64** only.
+
+```bash
+./scripts/stamp-version v1.2.3
+git add VERSION PKGBUILD
+git commit -m "Release v1.2.3"
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin HEAD v1.2.3
+```
+
+GoReleaser publishes Linux amd64 and arm64 archives and a `parentapproval-bin` AUR package (systemd unit, sysusers, sudoers, overlay, skill). The in-tree `PKGBUILD` stays a source checkout recipe. AUR push needs repo secret `AUR_KEY`. Dry-run: `make release-snapshot`.
 
 ## What this is not
 

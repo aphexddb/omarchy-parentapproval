@@ -35,6 +35,12 @@ Default public origin: `https://parentapprovals.com`. Configurable via
 `OMARCHY_PARENTAPPROVAL_RELAY` (laptop) and `RELAY_PUBLIC_URL` (relay).
 The relay container does not terminate TLS.
 
+The relay is the phone's code origin and a primary trust root. It cannot
+forge an Ed25519 `allow` with only public keys, but it can serve JavaScript
+that uses the key in IndexedDB. Self-host for high-assurance use.
+See [`trust-model.md`](trust-model.md). Crypto libraries are SRI-pinned;
+asset hashes are in [`web-assets.md`](web-assets.md).
+
 ## Pairing
 
 Opaque token URL: `https://parentapprovals.com/p/<token>`
@@ -42,7 +48,22 @@ Opaque token URL: `https://parentapprovals.com/p/<token>`
 `GET /p/{token}/meta` returns `{kind, sid|rid}`. The PWA then calls the
 existing pair/ask routes on the same origin.
 
-`POST /pair/{sid}` with `{v, device_id, name, alg:"Ed25519", pubkey}`. Both screens show the same 6-digit SAS. The phone confirms (`POST /pair/{sid}/confirm`); the laptop overlay Y is a fallback. The pubkey is stored only after that confirm. `GET /pair/{sid}/wait` long-polls until then.
+`POST /pair/{sid}` with `{v, device_id, name, alg:"Ed25519", pubkey}`. The 6-digit SAS
+is six decimal digits from SHA-256 of these bytes (trailing newline after every
+field, including the last):
+
+```
+OMARCHY-SAS/1
+<sid>
+<pubkey base64url>
+```
+
+A substituted key yields different digits. A second offer while one is pending
+is rejected (no last-writer-wins swap). The phone computes the SAS locally from
+its key; the laptop shows the offering device name. Laptop overlay confirm
+requires typing the 6 digits from the phone (a bare Y does not enroll). The
+phone confirms with `{device_id, sas}` (`POST /pair/{sid}/confirm`). The pubkey
+is stored only after that confirm. `GET /pair/{sid}/wait` long-polls until then.
 
 After confirm, `parentapproval pair` waits until the phone has posted `POST /push/subscribe` (notifications allowed in the Home Screen app), then exits. The laptop sends `{op:expect-push}` and polls `{op:push-ready}`. The relay pushes `{op:subscribed}` when the phone subscribes.
 
@@ -52,9 +73,17 @@ The relay looks up which laptop owns `sid`/`rid` (from WSS `open`) and proxies t
 
 ## Approval
 
-`GET /a/{rid}` (`Accept: application/json`) returns the request. `POST /a/{rid}/decision` with `{v, device_id, decision, sig}`. The server rebuilds canonical bytes from **stored** fields and verifies against the enrolled parent pubkey. First valid decision spends `rid`. Unauthenticated `deny` is allowed (kid cancel / panic). Unauthenticated `allow` is not.
+`GET /a/{rid}` (`Accept: application/json`) returns the request. Cleartext
+`user`, `cwd`, `cmd`, and `host_name` are omitted. Instead `sealed` is a map of
+`device_id` → NaCl box of `{"user","cwd","cmd","host_name"}` (X25519 from the
+enrolled Ed25519 key; blob is `ephemeral_pub || nonce || ciphertext`, unpadded
+base64url). The phone decrypts, displays, and hashes those fields. `POST /a/{rid}/decision` with `{v, device_id, decision, sig}`. The server rebuilds canonical bytes from **stored** fields and verifies against the enrolled parent pubkey. First valid decision spends `rid`. Unauthenticated `deny` is allowed (kid cancel / panic). Unauthenticated `allow` is not.
 
 TTL 120s. One outstanding request per user; a new one cancels the old.
+
+`create` over the unix socket sets `user` from `SO_PEERCRED` for
+unprivileged callers (the request field is ignored). Root may still pass
+`user` (PAM helper that did not drop privs). `pending.json` is `0600`.
 
 After `create`, the laptop sends `notify` on the WSS so the relay web-pushes paired phones.
 An already-open PWA does not wait for that push: it long-polls `GET /v1/watch` (signed;
@@ -83,7 +112,7 @@ host keys do not. Knowing `host_id` still must not let a stranger watch asks.
 The open PWA long-polls one host at a time with a paired-phone signature:
 
 ```
-GET /v1/watch?host_id=&device_id=&exp=&sig=
+GET /v1/watch?host_id=&device_id=&nonce=&exp=&sig=
 ```
 
 `sig` is Ed25519 over these bytes (trailing newline after every field):
@@ -92,10 +121,13 @@ GET /v1/watch?host_id=&device_id=&exp=&sig=
 OMARCHY-WATCH/1
 <host_id>
 <device_id>
+<nonce base64url>
 <exp unix seconds>
 ```
 
-`exp` must be in `(now, now+180]`. The relay verifies against the pubkey the
+`nonce` is 16 random bytes, unpadded base64url, unique per poll. A captured
+signature cannot be replayed: the server remembers `(device_id, nonce)` until
+`exp`. `exp` must be in `(now, now+60]`. The relay verifies against the pubkey the
 laptop enrolled (`{op:parent}`). Local `--dev` HTTP verifies against the
 daemon's stored parent. Missing fields are 400; a bad or unknown key is 401
 and does not wait.
@@ -122,6 +154,10 @@ Kid login accounts are left in place.
 
 Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`.
 `parentapproval pam` refuses login PAM services (`login`, `sddm`, `gdm`, …).
+The command shown to the parent is the sudo/pkexec argv after only a
+*leading* `sudo`/`pkexec` token (and a following `--`). A later argument
+whose basename is `sudo` is displayed as-is, including a resolved path,
+so a payload named `sudo` cannot hide behind a benign-looking command.
 
 Ad-hoc polkit (pkexec, disks, packagekit — not display-manager or
 `login1.create-session`) uses `/usr/share/polkit-1/rules.d/50-parentapproval.rules`
@@ -130,8 +166,9 @@ so kids `AUTH_SELF` instead of `auth_admin`. The session unit
 it shows the same parent-phone request as sudo, with the polkit command
 from `command_line` / `program` / the action message. After allow, the
 agent completes `polkit-agent-helper-1`; PAM redeems the one-shot grant
-so the parent is not asked twice. Wheel sessions leave the Omarchy
-password agent in place.
+so the parent is not asked twice. The grant is bound to the polkit
+action id and cookie; `RedeemService` must present both. Wheel sessions
+leave the Omarchy password agent in place.
 
 Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`:
 
@@ -140,7 +177,7 @@ auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup omarchy-
 auth [success=done default=die] pam_exec.so seteuid stdout /usr/bin/parentapproval pam
 ```
 
-Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. This block must stay **above** `pam_fprintd` / `pam_u2f` so an enrolled kid print cannot sudo.
+Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. The two auth lines live in `/etc/pam.d/parentapproval`; `sudo` and `polkit-1` `auth include` that file at the top. `apply-hooks` rewrites the include and re-hoists the include line so a later `1i auth sufficient pam_u2f.so` / `pam_fprintd.so` (Omarchy's fingerprint/FIDO setup scripts) does not win. `doctor` fails if any `auth sufficient` appears above the include. After enabling fingerprint or FIDO on a kid machine, re-run `sudo parentapproval apply-hooks`.
 
 Sudoers:
 

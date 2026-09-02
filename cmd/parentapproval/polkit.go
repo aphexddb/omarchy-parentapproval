@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,8 @@ const (
 	polkitHelperBin  = "/usr/lib/polkit-1/polkit-agent-helper-1"
 	polkitAgentPath  = "/com/parentapproval/PolkitAgent"
 )
+
+var polkitTicketDir = "/run/parentapproval"
 
 func pamLoginService(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
@@ -168,7 +172,7 @@ func (a *polkitAgent) BeginAuthentication(actionID, message, iconName string, de
 		return dbus.MakeFailedError(err)
 	}
 	cwd, _ := os.Getwd()
-	created, err := daemon.Create(p.socket, userName, "polkit", cwd, cmd, protocol.DefaultAskTTL)
+	created, err := daemon.CreateAction(p.socket, userName, "polkit", cwd, cmd, protocol.DefaultAskTTL, actionID, cookie)
 	if err != nil {
 		return dbus.MakeFailedError(err)
 	}
@@ -187,10 +191,50 @@ func (a *polkitAgent) BeginAuthentication(actionID, message, iconName string, de
 		}
 	}
 	uname := helperUser(identities, userName)
-	if err := completePolkitHelper(uname, cookie); err != nil {
+	writePolkitTicket(os.Getuid(), actionID, cookie)
+	if err := completePolkitHelper(uname, cookie, actionID); err != nil {
 		return dbus.MakeFailedError(err)
 	}
 	return nil
+}
+
+func polkitRedeemIDs() (action, cookie string) {
+	action = os.Getenv("PARENTAPPROVAL_POLKIT_ACTION")
+	cookie = os.Getenv("PARENTAPPROVAL_POLKIT_COOKIE")
+	if action != "" && cookie != "" {
+		return action, cookie
+	}
+	path := filepath.Join(polkitTicketDir, fmt.Sprintf("polkit-%d", os.Getuid()))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return action, cookie
+	}
+	var t struct {
+		Action string `json:"action"`
+		Cookie string `json:"cookie"`
+	}
+	if json.Unmarshal(raw, &t) != nil {
+		return action, cookie
+	}
+	if action == "" {
+		action = t.Action
+	}
+	if cookie == "" {
+		cookie = t.Cookie
+	}
+	return action, cookie
+}
+
+func writePolkitTicket(uid int, action, cookie string) {
+	if uid < 0 || (action == "" && cookie == "") {
+		return
+	}
+	dir := polkitTicketDir
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	raw, _ := json.Marshal(map[string]string{"action": action, "cookie": cookie})
+	_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("polkit-%d", uid)), raw, 0o644)
 }
 
 func (a *polkitAgent) CancelAuthentication(cookie string) *dbus.Error {
@@ -244,7 +288,7 @@ func sessionSubject() (string, map[string]dbus.Variant, error) {
 	return "unix-session", map[string]dbus.Variant{"session-id": dbus.MakeVariant(sid)}, nil
 }
 
-func completePolkitHelper(userName, cookie string) error {
+func completePolkitHelper(userName, cookie, actionID string) error {
 	if userName == "" || cookie == "" {
 		return errors.New("missing polkit helper identity")
 	}
@@ -266,6 +310,10 @@ func completePolkitHelper(userName, cookie string) error {
 		}
 	}
 	cmd := exec.Command(polkitHelperBin, userName)
+	cmd.Env = append(os.Environ(),
+		"PARENTAPPROVAL_POLKIT_ACTION="+actionID,
+		"PARENTAPPROVAL_POLKIT_COOKIE="+cookie,
+	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

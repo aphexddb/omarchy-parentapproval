@@ -17,11 +17,13 @@ const (
 	Version         = 1
 	CanonicalPrefix = "OMARCHY-APPROVE/1"
 	WatchPrefix     = "OMARCHY-WATCH/1"
+	SASPrefix       = "OMARCHY-SAS/1"
 	DecisionAllow   = "allow"
 	DecisionDeny    = "deny"
 	DefaultAskTTL   = 120
 	DefaultPairTTL  = 600
-	WatchAuthMax    = 180
+	WatchAuthMax    = 60
+	WatchNonceMin   = 16
 	ListenPort      = 17421
 	KidsGroup       = "omarchy-kids"
 	DefaultRelayURL = "https://parentapprovals.com"
@@ -51,6 +53,39 @@ func CmdHash(user, service, cwd, cmd string) []byte {
 	return h.Sum(nil)
 }
 
+// PairSAS is the 6-digit short-authentication string for a pairing offer.
+// It is SHA-256 of OMARCHY-SAS/1\n<sid>\n<pubkey>\n mapped to decimal digits
+// with rejection sampling. A substituted key yields different digits, so the
+// laptop and phone only match when they saw the same offered key.
+func PairSAS(sid, pubkeyB64 string) string {
+	h := sha256.Sum256([]byte(SASPrefix + "\n" + sid + "\n" + pubkeyB64 + "\n"))
+	return digitsFromHash(h[:], 6)
+}
+
+// digitsFromHash maps digest bytes to n decimal digits without modulo bias.
+// Bytes 250–255 are skipped (250 is the largest multiple of 10 that fits in a
+// byte). If the digest runs out, it is re-hashed with a counter.
+func digitsFromHash(sum []byte, n int) string {
+	out := make([]byte, 0, n)
+	block := sum
+	for counter := 0; len(out) < n; counter++ {
+		for _, b := range block {
+			if b >= 250 {
+				continue
+			}
+			out = append(out, '0'+b%10)
+			if len(out) == n {
+				return string(out)
+			}
+		}
+		h := sha256.New()
+		h.Write(sum)
+		h.Write([]byte{byte(counter + 1)})
+		block = h.Sum(nil)
+	}
+	return string(out)
+}
+
 // Canonical is the exact byte string the phone signs and the daemon verifies.
 // decision is "allow" or "deny". ridHex is lowercase hex. exp is unix seconds.
 func Canonical(decision, ridHex, nonceB64 string, exp int64, hostIDB64, user, service, cmdHashB64 string) []byte {
@@ -71,13 +106,39 @@ func Canonical(decision, ridHex, nonceB64 string, exp int64, hostIDB64, user, se
 }
 
 // CanonicalWatch is signed by a paired parent phone to subscribe to live asks.
-// host_id is B64(host pubkey), not the hostname. exp is unix seconds.
-func CanonicalWatch(hostID, deviceID string, exp int64) []byte {
-	return []byte(fmt.Sprintf("%s\n%s\n%s\n%d\n", WatchPrefix, hostID, deviceID, exp))
+// host_id is B64(host pubkey), not the hostname. nonce is unpadded base64url
+// of at least WatchNonceMin random bytes, unique per poll. exp is unix seconds.
+func CanonicalWatch(hostID, deviceID, nonce string, exp int64) []byte {
+	return []byte(fmt.Sprintf("%s\n%s\n%s\n%s\n%d\n", WatchPrefix, hostID, deviceID, nonce, exp))
 }
 
 func WatchAuthFresh(exp, now int64) bool {
 	return exp > now && exp <= now+WatchAuthMax
+}
+
+// ValidWatchNonce accepts an unpadded base64url nonce of at least 16 bytes.
+func ValidWatchNonce(nonce string) bool {
+	raw, err := DecodeB64(nonce)
+	return err == nil && len(raw) >= WatchNonceMin
+}
+
+// ConsumeWatchNonce records a used (device, nonce) until exp. A repeat is
+// rejected so a captured watch URL cannot be replayed inside the window.
+func ConsumeWatchNonce(used map[string]int64, deviceID, nonce string, exp, now int64) bool {
+	if used == nil || deviceID == "" || nonce == "" {
+		return false
+	}
+	for k, e := range used {
+		if e <= now {
+			delete(used, k)
+		}
+	}
+	key := deviceID + "\x00" + nonce
+	if _, ok := used[key]; ok {
+		return false
+	}
+	used[key] = exp
+	return true
 }
 
 func Sign(priv ed25519.PrivateKey, canonical []byte) []byte {
@@ -127,11 +188,12 @@ type Request struct {
 	Match    string `json:"match"`
 	HostName string `json:"host_name"`
 	HostID   string `json:"host_id"`
-	User     string `json:"user"`
-	Service  string `json:"service"`
-	CWD      string `json:"cwd"`
-	Cmd      string `json:"cmd"`
-	CmdHash  string `json:"cmd_hash"`
+	User     string            `json:"user"`
+	Service  string            `json:"service"`
+	CWD      string            `json:"cwd"`
+	Cmd      string            `json:"cmd"`
+	CmdHash  string            `json:"cmd_hash"`
+	Sealed   map[string]string `json:"sealed,omitempty"`
 }
 
 // Decision is the JSON body for POST /a/{rid}/decision.

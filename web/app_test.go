@@ -1,7 +1,12 @@
 package web
 
 import (
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -14,6 +19,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	s := string(raw)
 	for _, want := range []string{
 		"function resumePaired",
+		"function shouldApplyPairHandoff",
+		"A Safari visit to / must not enter",
 		"function pushNeedsStandalone",
 		"function settleHomeURL",
 		"function showNotifySetup",
@@ -29,6 +36,11 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"return bootPair(m.sid)",
 		"function offerPair",
 		"function waitForPair",
+		"function pairSAS",
+		"function ed25519SeedToX25519",
+		"function openSealed",
+		"function revealAsk",
+		"OMARCHY-SAS/1",
 		"function pairTokenFromPath",
 		"function fetchHandoff",
 		"function postHandoff",
@@ -43,6 +55,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function watchOne",
 		"function watchQuery",
 		"function canonicalWatch",
+		"function watchNonce",
+		"&nonce=",
 		"function handleLiveAsk",
 		"function listenLiveAsk",
 		"function ridFromWatchEvent",
@@ -73,6 +87,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`curl -fsSL https://parentapprovals.com/install | bash`,
 		`class="copy-btn"`,
 		`the request shows here right away`,
+		`integrity="sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/"`,
+		`integrity="sha384-2hE+62EhDTI8GB1l6/KBZldM8qsy8CUJ/e5YlZaSbD6Bi4z0YhdrH2LCjDqYXAkg"`,
 	} {
 		if !strings.Contains(htmlS, want) {
 			t.Errorf("index.html missing %q", want)
@@ -115,6 +131,84 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	}
 	if !strings.Contains(script, "github.com/aphexddb/omarchy-parentapproval") {
 		t.Error("install script missing repo URL")
+	}
+}
+
+func TestSafariRootShowsHomeNotOnboarding(t *testing.T) {
+	raw, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	resumeStart := strings.Index(s, "async function resumePaired()")
+	bootStart := strings.Index(s, "async function boot()")
+	offerStart := strings.Index(s, "async function offerPair(")
+	if resumeStart < 0 || bootStart < 0 || offerStart < 0 || resumeStart >= bootStart || bootStart >= offerStart {
+		t.Fatal("could not locate resumePaired/boot/offerPair")
+	}
+	resume := s[resumeStart:bootStart]
+	if strings.Contains(resume, "wireA2HS") {
+		t.Error("resumePaired must not send Safari visitors into A2HS onboarding")
+	}
+	if !strings.Contains(resume, "showIdle([])") {
+		t.Error("iOS Safari should render the public unpaired home, not paired onboarding")
+	}
+	boot := s[bootStart:offerStart]
+	if !strings.Contains(boot, "shouldApplyPairHandoff()") {
+		t.Error("boot should only replay pair handoff in the Home Screen app")
+	}
+	if !strings.Contains(s, "function shouldApplyPairHandoff() {\n  return isStandalone();\n}") {
+		t.Error("pair handoff belongs to the standalone Home Screen app, not Safari")
+	}
+	if !strings.Contains(s, "} else if (pushNeedsStandalone()) {\n    wireA2HS([rec]);") {
+		t.Error("finishPair should still coach A2HS immediately after a Safari pair")
+	}
+}
+
+func TestSafariHomeSimulation(t *testing.T) {
+	cmd := exec.Command("node", "safari_home_sim.mjs")
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("safari_home_sim: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("unexpected sim output: %s", out)
+	}
+}
+
+func TestCryptoLibrarySRIMatchesFiles(t *testing.T) {
+	html, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlS := string(html)
+	for _, name := range []string{"nacl.min.js", "sha256.min.js"} {
+		raw, err := FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha512.Sum384(raw)
+		pin := "sha384-" + base64.StdEncoding.EncodeToString(sum[:])
+		if !strings.Contains(htmlS, `src="/`+name+`"`) || !strings.Contains(htmlS, pin) {
+			t.Fatalf("%s missing SRI pin %s", name, pin)
+		}
+	}
+	assets, err := os.ReadFile("../docs/web-assets.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(assets)
+	for _, name := range []string{"nacl.min.js", "sha256.min.js", "app.js", "app.css", "sw.js"} {
+		raw, err := FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		hexSum := hex.EncodeToString(sum[:])
+		if !strings.Contains(doc, hexSum) {
+			t.Errorf("docs/web-assets.md missing sha256 for %s (%s)", name, hexSum)
+		}
 	}
 }
 

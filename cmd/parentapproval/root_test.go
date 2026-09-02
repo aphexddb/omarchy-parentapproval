@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	approot "parentapproval"
 )
 
 func TestControlsRequireRoot(t *testing.T) {
@@ -38,6 +40,36 @@ func TestUsageOmitsEnable(t *testing.T) {
 	}
 	if !strings.Contains(s, "disable") {
 		t.Fatal("disable should remain to turn hooks off without uninstalling")
+	}
+}
+
+func TestReadVersionUsesVERSIONWhenUnset(t *testing.T) {
+	oldV, oldC := version, commit
+	t.Cleanup(func() { version, commit = oldV, oldC })
+	version = "dev"
+	commit = "abc"
+	want := strings.TrimSpace(approot.VersionFile) + " (abc)"
+	if got := readVersion(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestReadVersionPrefersLdflags(t *testing.T) {
+	oldV, oldC := version, commit
+	t.Cleanup(func() { version, commit = oldV, oldC })
+	version = "9.9.9-test"
+	commit = "deadbeefcafebabe"
+	if got := readVersion(); got != "9.9.9-test (deadbee)" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestShortSHA(t *testing.T) {
+	if got := shortSHA("abcdef1"); got != "abcdef1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := shortSHA("abcdef12"); got != "abcdef1" {
+		t.Fatalf("got %q", got)
 	}
 }
 

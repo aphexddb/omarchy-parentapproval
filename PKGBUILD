@@ -13,7 +13,7 @@ optdepends=(
 )
 replaces=('omarchy-parentapproval')
 conflicts=('omarchy-parentapproval')
-backup=('etc/sudoers.d/omarchy-kids')
+backup=('etc/sudoers.d/omarchy-kids' 'etc/pam.d/parentapproval')
 install=packaging/parentapproval.install
 options=('!debug' '!emptydirs')
 # In-tree checkout: no release tarball. Directories cannot be listed in
@@ -24,13 +24,14 @@ source=()
 sha256sums=()
 
 _src_files=(
-  Makefile go.mod go.sum VERSION LICENSE README.md AGENTS.md install.sh
+  Makefile go.mod go.sum VERSION version.go LICENSE README.md AGENTS.md install.sh
   cmd internal web packaging default overlay
 )
 
 prepare() {
   local f v
   v=$(tr -d '[:space:]' < "$startdir/VERSION")
+  v=${v//[-+]/_}
   if [[ $v != "$pkgver" ]]; then
     echo "PKGBUILD pkgver=$pkgver but VERSION is $v" >&2
     return 1

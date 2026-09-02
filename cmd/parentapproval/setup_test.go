@@ -11,19 +11,69 @@ import (
 func TestPAMBlockRoundTrip(t *testing.T) {
 	original := "auth      sufficient pam_unix.so\n"
 	once := pamLines() + original
-	if !strings.Contains(once, "parentapproval: kids skip password") || !strings.Contains(once, "pam_exec.so") {
-		t.Fatalf("missing PAM block:\n%s", once)
+	if !strings.Contains(once, "parentapproval: kids skip password") || !strings.Contains(once, "auth include parentapproval") {
+		t.Fatalf("missing PAM include:\n%s", once)
 	}
 	twice := pamLines() + stripPAM(once)
 	if once != twice {
 		t.Fatalf("patch should be idempotent\n%s\n---\n%s", once, twice)
 	}
 	stripped := stripPAM(once)
-	if strings.Contains(stripped, "parentapproval") || strings.Contains(stripped, "pam_exec.so") {
-		t.Fatalf("strip left our block:\n%s", stripped)
+	if strings.Contains(stripped, "parentapproval") {
+		t.Fatalf("strip left our include:\n%s", stripped)
 	}
 	if stripped != original && stripped != original+"\n" {
 		t.Fatalf("strip should restore original, got %q", stripped)
+	}
+}
+
+func TestPAMAuthLinesStillInlineForIncludeFile(t *testing.T) {
+	lines := pamAuthLines()
+	if !strings.Contains(lines, "pam_exec.so") || !strings.Contains(lines, "seteuid stdout") {
+		t.Fatalf("include file missing pam_exec:\n%s", lines)
+	}
+	old := lines + "auth      sufficient pam_unix.so\n"
+	stripped := stripPAM(old)
+	if strings.Contains(stripped, "parentapproval") || strings.Contains(stripped, "pam_exec.so") {
+		t.Fatalf("strip left old inline block:\n%s", stripped)
+	}
+}
+
+func TestPAMSufficientAbove(t *testing.T) {
+	ok := pamLines() + "auth\tsufficient\tpam_unix.so\n"
+	if mods := pamSufficientAbove(ok); len(mods) != 0 {
+		t.Fatalf("include first: %v", mods)
+	}
+	badU2F := "auth    sufficient pam_u2f.so cue authfile=/etc/fido2/fido2\n" + pamLines() + "auth sufficient pam_unix.so\n"
+	mods := pamSufficientAbove(badU2F)
+	if len(mods) != 1 || !strings.Contains(mods[0], "pam_u2f.so") {
+		t.Fatalf("u2f above: %v", mods)
+	}
+	badBoth := "auth sufficient pam_fprintd.so\nauth sufficient pam_u2f.so\n" + pamLines()
+	mods = pamSufficientAbove(badBoth)
+	if len(mods) != 2 {
+		t.Fatalf("want fprintd+u2f, got %v", mods)
+	}
+	if !pamHookInstalled(pamLines()) || pamHookInstalled("auth sufficient pam_unix.so\n") {
+		t.Fatal("pamHookInstalled")
+	}
+}
+
+func TestShippedPAMInclude(t *testing.T) {
+	raw, err := os.ReadFile("../../packaging/parentapproval.pam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		"pam_succeed_if.so",
+		"pam_exec.so",
+		"parentapproval pam",
+		"omarchy-kids",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("parentapproval.pam missing %q", want)
+		}
 	}
 }
 

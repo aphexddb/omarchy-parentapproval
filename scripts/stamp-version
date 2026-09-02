@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Stamp VERSION and PKGBUILD from a SemVer 2.0 tag (https://semver.org/).
+# Usage: stamp-version v1.2.3
+#        stamp-version 1.2.3-rc.1
+#
+# VERSION keeps the SemVer string (no v). PKGBUILD pkgver is Arch-safe
+# (hyphens and pluses become underscores). pkgrel is reset to 1.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+usage() {
+  echo "usage: $0 <version>   # SemVer 2.0, optional v prefix" >&2
+  exit 2
+}
+
+[[ $# -eq 1 || $# -eq 2 ]] || usage
+
+# GoReleaser: ./scripts/stamp-version {{ .Version }} {{ .IsSnapshot }}
+if [[ ${2:-} == true ]]; then
+  echo "stamp-version: snapshot, skipping"
+  exit 0
+fi
+
+raw=$1
+ver=${raw#v}
+
+# SemVer 2.0.0, optional v already stripped.
+# https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+if [[ ! $ver =~ $semver ]]; then
+  echo "stamp-version: not SemVer 2.0: $raw" >&2
+  exit 1
+fi
+
+# Arch pkgver cannot contain '-' (it splits pkgver-pkgrel).
+pkgver=${ver//[-+]/_}
+
+printf '%s\n' "$ver" >VERSION
+
+awk -v ver="$pkgver" '
+  BEGIN { done_ver = 0; done_rel = 0 }
+  /^pkgver=/ && !done_ver { print "pkgver=" ver; done_ver = 1; next }
+  /^pkgrel=/ && !done_rel { print "pkgrel=1"; done_rel = 1; next }
+  { print }
+' PKGBUILD >PKGBUILD.tmp
+mv PKGBUILD.tmp PKGBUILD
+
+echo "VERSION=$ver  PKGBUILD pkgver=$pkgver pkgrel=1"
