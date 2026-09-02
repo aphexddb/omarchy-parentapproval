@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -124,10 +125,23 @@ Environment:
 `)
 }
 
-// Overridden at link time: -X main.version=... (make from VERSION, GoReleaser from the tag).
-var version = "dev"
+// Set at link time by make and GoReleaser:
+//
+//	-X main.version=...  -X main.commit=...
+var (
+	version = "dev"
+	commit  = ""
+)
 
 func readVersion() string {
+	v := versionNumber()
+	if c := commitID(); c != "" {
+		return v + " (" + c + ")"
+	}
+	return v
+}
+
+func versionNumber() string {
 	if version != "" && version != "dev" {
 		return version
 	}
@@ -135,6 +149,20 @@ func readVersion() string {
 		return v
 	}
 	return version
+}
+
+func commitID() string {
+	if commit != "" {
+		return commit
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			if s.Key == "vcs.revision" && s.Value != "" {
+				return s.Value
+			}
+		}
+	}
+	return ""
 }
 
 var geteuid = os.Geteuid

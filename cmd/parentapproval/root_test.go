@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	approot "parentapproval"
 )
 
 func TestControlsRequireRoot(t *testing.T) {
@@ -42,20 +44,22 @@ func TestUsageOmitsEnable(t *testing.T) {
 }
 
 func TestReadVersionUsesVERSIONWhenUnset(t *testing.T) {
-	old := version
-	t.Cleanup(func() { version = old })
+	oldV, oldC := version, commit
+	t.Cleanup(func() { version, commit = oldV, oldC })
 	version = "dev"
-	got := readVersion()
-	if got == "" || got == "dev" {
-		t.Fatalf("expected VERSION file, got %q", got)
+	commit = "abc"
+	want := strings.TrimSpace(approot.VersionFile) + " (abc)"
+	if got := readVersion(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
 func TestReadVersionPrefersLdflags(t *testing.T) {
-	old := version
-	t.Cleanup(func() { version = old })
+	oldV, oldC := version, commit
+	t.Cleanup(func() { version, commit = oldV, oldC })
 	version = "9.9.9-test"
-	if got := readVersion(); got != "9.9.9-test" {
+	commit = "deadbeefcafebabe"
+	if got := readVersion(); got != "9.9.9-test (deadbeefcafebabe)" {
 		t.Fatalf("got %q", got)
 	}
 }

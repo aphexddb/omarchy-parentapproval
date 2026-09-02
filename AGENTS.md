@@ -13,7 +13,7 @@ parentapproval ask --cmd "pacman -S cowsay"
 
 ## Release
 
-[SemVer 2.0](https://semver.org/). Tags are `vMAJOR.MINOR.PATCH` (prerelease: `v1.2.3-rc.1`). `VERSION` is the same number without the `v`. The CLI embeds `VERSION`; `make` and GoReleaser also stamp `-X main.version` from `VERSION` / the tag.
+[SemVer 2.0](https://semver.org/). Tags are `vMAJOR.MINOR.PATCH` (prerelease: `v1.2.3-rc.1`). `VERSION` is the same number without the `v`. `make` and GoReleaser stamp `-X main.version` and `-X main.commit` (`parentapproval version` prints `1.2.3 (git-hash)`). Untagged `go build` falls back to the embedded `VERSION` file and VCS revision.
 
 ```bash
 ./scripts/stamp-version v1.2.3
