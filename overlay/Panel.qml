@@ -307,7 +307,7 @@ Item {
 
         Rectangle {
           id: qrCanvas
-          visible: root.qrSize > 0
+          visible: root.qrSize > 0 && !(root.pairing && root.pairState === "pending_confirm")
           readonly property int moduleSize: root.qrSize > 0 ? Math.max(3, Math.floor(Style.space(240) / root.qrSize)) : 0
           width: root.qrSize * moduleSize
           height: width

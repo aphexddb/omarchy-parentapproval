@@ -8,9 +8,6 @@ url="https://github.com/aphexddb/omarchy-parentapproval"
 license=('MIT')
 depends=('pam' 'sudo' 'polkit')
 makedepends=('go')
-optdepends=(
-  'imv: fullscreen QR on Wayland when the overlay plugin is not installed'
-)
 replaces=('omarchy-parentapproval')
 conflicts=('omarchy-parentapproval')
 backup=('etc/sudoers.d/omarchy-kids' 'etc/pam.d/parentapproval' 'etc/pam.d/parentapproval-polkit')
