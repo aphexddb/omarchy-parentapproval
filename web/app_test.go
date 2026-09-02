@@ -60,6 +60,7 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function handleLiveAsk",
 		"function listenLiveAsk",
 		"function ridFromWatchEvent",
+		"req.host_name || rec.host_name",
 		"OMARCHY-WATCH/1",
 		"/v1/watch",
 		`the request shows here right away`,
@@ -81,6 +82,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`id="home-paired"`,
 		`id="home-paired-hint"`,
 		`id="result-title"`,
+		`id="host"`,
+		`Request from`,
 		`<h1>Paired</h1>`,
 		`sudo parentapproval pair`,
 		`Get started`,
@@ -162,6 +165,31 @@ func TestSafariRootShowsHomeNotOnboarding(t *testing.T) {
 	}
 	if !strings.Contains(s, "} else if (pushNeedsStandalone()) {\n    wireA2HS([rec]);") {
 		t.Error("finishPair should still coach A2HS immediately after a Safari pair")
+	}
+}
+
+func TestApproveShowsComputerHostname(t *testing.T) {
+	html, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlS := string(html)
+	if !strings.Contains(htmlS, `Request from`) {
+		t.Error("approve screen must label the requesting computer")
+	}
+	if !strings.Contains(htmlS, `<h1 id="host">`) {
+		t.Error("approve screen must show the computer hostname as the title")
+	}
+	js, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(js)
+	if !strings.Contains(s, `$("host").textContent = req.host_name || rec.host_name`) {
+		t.Error("approve must set the hostname from the sealed ask, falling back to the paired record")
+	}
+	if !strings.Contains(s, "req.host_name = fields.host_name || req.host_name") {
+		t.Error("revealAsk must copy host_name out of the sealed box")
 	}
 }
 
