@@ -115,7 +115,7 @@ func TestInstallScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	if !strings.HasPrefix(s, "#!/bin/bash") {
+	if !strings.HasPrefix(s, "#!/usr/bin/env bash") {
 		t.Fatalf("shebang: %q", s[:min(40, len(s))])
 	}
 	if !strings.Contains(s, "curl -fsSL https://parentapprovals.com/install | bash") {

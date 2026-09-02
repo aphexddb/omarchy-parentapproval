@@ -1,6 +1,7 @@
 package web
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -78,7 +79,7 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(inst)
-	if !strings.HasPrefix(script, "#!/bin/bash") {
+	if !strings.HasPrefix(script, "#!/usr/bin/env bash") {
 		t.Error("install script missing shebang")
 	}
 	if !strings.Contains(script, "scripts/dev-install") {
@@ -86,5 +87,19 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	}
 	if !strings.Contains(script, "github.com/aphexddb/omarchy-parentapproval") {
 		t.Error("install script missing repo URL")
+	}
+}
+
+func TestInstallScriptMatchesRepoRoot(t *testing.T) {
+	embedded, err := FS.ReadFile("install")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.ReadFile("../install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(embedded) != string(root) {
+		t.Fatal("web/install must be byte-identical to ../install.sh")
 	}
 }

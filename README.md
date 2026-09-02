@@ -6,7 +6,7 @@ This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids ac
 
 A community extra for Omarchy.
 
-Agents: load [`default/agents/skills/parentapproval/SKILL.md`](default/agents/skills/parentapproval/SKILL.md) (or run `sudo parentapproval install-skills`). The usual test is:
+Agents: load [`default/agents/skills/parentapproval/SKILL.md`](SKILL.md) (or run `sudo parentapproval install-skills`).
 
 first time setup
 ```bash
@@ -34,11 +34,8 @@ No inbound firewall holes, phones talk only to the HTTPS origin over WSS.
 Wheel parents still type a password. The approval path is only for `omarchy-kids`.
 
 ## Install
-
-On Omarchy / Arch:
-
 ```bash
-curl -fsSL https://parentapprovals.com/install | bash
+curl -fsSL https://raw.githubusercontent.com/aphexddb/omarchy-parentapproval/main/install.sh | bash
 ```
 
 That clones the repo, builds the package, and installs it with pacman. From a checkout, the same path is:
@@ -47,9 +44,7 @@ That clones the repo, builds the package, and installs it with pacman. From a ch
 ./scripts/dev-install
 ```
 
-That is `makepkg -f -si --noconfirm` plus the overlay plugin. `-f` so makepkg does not reuse a stale tarball. `./install-omarchy` is the same script.
-
-Tear it down (package, overlay, skill links, daemon state; not kid logins):
+`./install-omarchy` is the same script. To remove (package, overlay, skill links, daemon state):
 
 ```bash
 ./scripts/dev-uninstall
