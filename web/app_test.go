@@ -28,6 +28,7 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function writeBridge",
 		"function wireA2HS",
 		"function showIdle",
+		"function renderHostList",
 		"function showDecision",
 		"function maybeResumeIdle",
 		"function wireHomeNotify",
@@ -85,6 +86,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`id="host"`,
 		`Request from`,
 		`<h1>Paired</h1>`,
+		`Paired with`,
+		`id="home-host-list"`,
 		`sudo parentapproval pair`,
 		`Get started`,
 		`curl -fsSL https://parentapprovals.com/install | bash`,
@@ -190,6 +193,40 @@ func TestApproveShowsComputerHostname(t *testing.T) {
 	}
 	if !strings.Contains(s, "req.host_name = fields.host_name || req.host_name") {
 		t.Error("revealAsk must copy host_name out of the sealed box")
+	}
+}
+
+func TestIdleShowsPairedWithHostList(t *testing.T) {
+	html, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlS := string(html)
+	if !strings.Contains(htmlS, `Paired with`) {
+		t.Error("idle paired home must have a Paired with heading")
+	}
+	if !strings.Contains(htmlS, `id="home-host-list"`) {
+		t.Error("idle paired home must list hostnames in #home-host-list")
+	}
+	js, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(js)
+	if !strings.Contains(s, "function renderHostList") {
+		t.Error("showIdle must render a hostname list, not a comma-joined sentence")
+	}
+	if strings.Contains(s, `recs.map((r) => r.host_name || "laptop").join(", ")`) {
+		t.Error("idle paired list must not join hostnames with commas")
+	}
+	cmd := exec.Command("node", "host_list_sim.mjs")
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("host_list_sim: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("unexpected sim output: %s", out)
 	}
 }
 
