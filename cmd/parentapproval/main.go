@@ -65,8 +65,10 @@ func main() {
 		err = cmdRevoke(os.Args[2:])
 	case "setup-kid":
 		err = cmdSetupKid(os.Args[2:])
-	case "enable":
-		err = cmdEnable()
+	case "apply-hooks":
+		err = cmdApplyHooks()
+	case "remove-hooks":
+		err = cmdRemoveHooks()
 	case "disable":
 		err = cmdDisable()
 	case "teardown-firewall":
@@ -105,8 +107,7 @@ Commands:
   pending [--json]              list pending requests
   revoke DEVICE_ID              unpair a phone (root)
   doctor                        check PAM and daemon (root)
-  enable                        install PAM, sudoers, systemd (root)
-  disable                       remove PAM and sudoers hooks (root)
+  disable                       remove PAM hooks without uninstalling (root)
   setup-kid USER                create a kid account; link agent skill (root)
   install-skills                install the agent skill (root)
   daemon [--dev] [--relay URL]  run the daemon
@@ -138,7 +139,7 @@ func requireRoot(cmd string) error {
 func commandNeedsRoot(cmd string) bool {
 	switch cmd {
 	case "pair", "revoke", "doctor",
-		"enable", "disable", "setup-kid", "install-skills",
+		"apply-hooks", "remove-hooks", "disable", "setup-kid", "install-skills",
 		"teardown-firewall":
 		return true
 	default:

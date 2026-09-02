@@ -20,9 +20,11 @@ post_install() {
     systemctl reset-failed parentapprovald.service >/dev/null 2>&1 || true
     systemctl enable --now parentapprovald.service >/dev/null 2>&1 || true
   fi
+  if ! /usr/bin/parentapproval apply-hooks; then
+    echo "warning: could not apply PAM/sudo hooks" >&2
+  fi
   echo "Parent Approval is installed. Daemon should be running."
   echo "As the parent:"
-  echo "  sudo parentapproval enable"
   echo "  sudo parentapproval pair"
   echo "  sudo parentapproval setup-kid <kid-username>"
   echo "  sudo parentapproval install-skills"
@@ -39,9 +41,15 @@ post_upgrade() {
     systemctl reset-failed parentapprovald.service >/dev/null 2>&1 || true
     systemctl restart parentapprovald.service >/dev/null 2>&1 || true
   fi
+  if ! /usr/bin/parentapproval apply-hooks; then
+    echo "warning: could not apply PAM/sudo hooks" >&2
+  fi
 }
 
 pre_remove() {
+  if [ -x /usr/bin/parentapproval ]; then
+    /usr/bin/parentapproval remove-hooks || true
+  fi
   if _systemd_live; then
     systemctl disable --now parentapprovald.service >/dev/null 2>&1 || true
     systemctl disable --now omarchy-parentapprovald.service >/dev/null 2>&1 || true

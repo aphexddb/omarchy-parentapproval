@@ -54,7 +54,6 @@ Binary is `/usr/bin/parentapproval` after `makepkg -f -si` or `sudo make install
 |---|---|
 | Ask, then daemon runs CMD as root | `parentapproval ask --cmd "pacman -S cowsay"` |
 | Pair parent phone | `sudo parentapproval pair` |
-| Enable PAM + daemon | `sudo parentapproval enable` |
 | Create / lock a kid user | `sudo parentapproval setup-kid milo` |
 | Status / paired phones | `parentapproval status` |
 | List pending request | `parentapproval pending` |
@@ -64,7 +63,7 @@ Binary is `/usr/bin/parentapproval` after `makepkg -f -si` or `sudo make install
 | Unprivileged dry-run daemon | `parentapproval daemon --dev` |
 
 `ask`, `pending`, and `status` talk to the systemd socket as a regular user.
-Pair, revoke, doctor, enable, disable, setup-kid, and
+Pair, revoke, doctor, disable, setup-kid, and
 install-skills need sudo.
 `--dev` / `OMARCHY_PARENTAPPROVAL_DEV=1` is only for an unprivileged local
 daemon (`~/.local/state` + a per-user socket).
@@ -72,16 +71,15 @@ daemon (`~/.local/state` + a per-user socket).
 ## Setup (parent wheel account)
 
 ```bash
-sudo parentapproval enable
 sudo parentapproval pair          # scan, confirm the 6-digit code on the phone, allow notifications
 sudo parentapproval setup-kid milo
 sudo parentapproval install-skills
 ```
 
-`setup-kid` links this skill into the kid's agent dirs so their coding agents
-pick it up — do not run `install-skills` as the kid. `enable` backfills every
-current `omarchy-kids` member. `sudo parentapproval install-skills`
-does the parent (`SUDO_USER`) and all kids.
+Installing the package applies PAM, sudoers, the `omarchy-kids` group, and the
+daemon. `setup-kid` links this skill into the kid's agent dirs so their coding
+agents pick it up — do not run `install-skills` as the kid.
+`sudo parentapproval install-skills` does the parent (`SUDO_USER`) and all kids.
 
 On the phone after pair: Add **this pairing page** to Home Screen, open the
 icon, tap Allow notifications. `pair` waits until notifications are on, then

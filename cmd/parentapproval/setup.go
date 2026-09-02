@@ -22,10 +22,28 @@ const (
 	legacySkillName = "omarchy-parentapproval"
 )
 
-func cmdEnable() error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("enable must run as root (sudo parentapproval enable)")
+func cmdApplyHooks() error {
+	if err := applyHooks(); err != nil {
+		return err
 	}
+	fmt.Println("Parent Approval hooks applied (PAM, sudoers, daemon).")
+	return nil
+}
+
+func cmdRemoveHooks() error {
+	removeHooks()
+	return nil
+}
+
+func cmdDisable() error {
+	removeHooks()
+	_ = exec.Command("systemctl", "disable", "--now", unitName).Run()
+	_ = exec.Command("systemctl", "disable", "--now", legacyUnitName).Run()
+	fmt.Println("Parent Approval hooks removed. Kid accounts and paired phones are unchanged.")
+	return nil
+}
+
+func applyHooks() error {
 	if err := ensureGroup(); err != nil {
 		return err
 	}
@@ -41,24 +59,14 @@ func cmdEnable() error {
 	if err := installUnit(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: systemd unit not enabled (%v)\n", err)
 	}
-	fmt.Println("Parent Approval is enabled.")
-	fmt.Println("Next: sudo parentapproval pair")
-	fmt.Println("Then: sudo parentapproval setup-kid <username>")
 	linkSkillsForKids()
 	return nil
 }
 
-func cmdDisable() error {
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("disable must run as root")
-	}
+func removeHooks() {
 	_ = unpatchPAM("/etc/pam.d/sudo")
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
-	_ = os.Remove(sudoersKid)
-	_ = exec.Command("systemctl", "disable", "--now", unitName).Run()
-	_ = exec.Command("systemctl", "disable", "--now", legacyUnitName).Run()
-	fmt.Println("Parent Approve hooks removed. Paired phones are unchanged.")
-	return nil
+	unlinkInstalledSkills()
 }
 
 func cmdTeardownFirewall() error {
@@ -77,7 +85,7 @@ func cmdSetupKid(args []string) error {
 	if err := validateUsername(name); err != nil {
 		return err
 	}
-	if err := cmdEnable(); err != nil {
+	if err := applyHooks(); err != nil {
 		return err
 	}
 	if _, err := user.Lookup(name); err == nil {
@@ -132,11 +140,11 @@ func cmdDoctor(args []string) error {
 	if raw, err := os.ReadFile("/etc/pam.d/sudo"); err == nil {
 		text := string(raw)
 		hasPAM := strings.Contains(text, pamMarker)
-		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — parentapproval enable")
+		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — reinstall the parentapproval package")
 		fprint := strings.Index(text, "pam_fprintd.so")
 		ours := strings.Index(text, pamMarker)
 		if fprint >= 0 && ours >= 0 {
-			check(ours < fprint, "parent approve is above fingerprint", "fingerprint is above parent approve — kids with an enrolled print could sudo. Re-run enable.")
+			check(ours < fprint, "parent approve is above fingerprint", "fingerprint is above parent approve — kids with an enrolled print could sudo. Reinstall the parentapproval package.")
 		}
 	}
 	if _, err := os.Stat(sudoersKid); err == nil {
@@ -245,7 +253,7 @@ func stripPAM(text string) string {
 			skipNext = true
 			continue
 		}
-		if strings.Contains(line, pamMarker) {
+		if strings.Contains(line, pamMarker) || (strings.Contains(line, "pam_exec.so") && strings.Contains(line, "parentapproval")) {
 			continue
 		}
 		keep = append(keep, line)
@@ -341,6 +349,52 @@ func installSkillsUsers() ([]*user.User, error) {
 		return nil, fmt.Errorf("install-skills: cannot resolve home directory")
 	}
 	return out, nil
+}
+
+func unlinkInstalledSkills() {
+	src, err := skillDir()
+	if err != nil {
+		src = ""
+	}
+	seen := map[string]bool{}
+	consider := func(home string) {
+		if home == "" || seen[home] {
+			return
+		}
+		seen[home] = true
+		for _, rel := range skillTargetRels {
+			for _, name := range []string{skillName, legacySkillName} {
+				dst := filepath.Join(home, rel, name)
+				target, err := os.Readlink(dst)
+				if err != nil {
+					continue
+				}
+				if src != "" && target != src && !strings.Contains(target, "/parentapproval/") && !strings.Contains(target, "/omarchy-parentapproval/") {
+					continue
+				}
+				_ = os.Remove(dst)
+			}
+		}
+	}
+	if kids, err := groupMembers(protocol.KidsGroup); err == nil {
+		for _, k := range kids {
+			if k != nil {
+				consider(k.HomeDir)
+			}
+		}
+	}
+	if u := os.Getenv("SUDO_USER"); u != "" && u != "root" {
+		if usr, err := user.Lookup(u); err == nil {
+			consider(usr.HomeDir)
+		}
+	}
+	if entries, err := os.ReadDir("/home"); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				consider(filepath.Join("/home", e.Name()))
+			}
+		}
+	}
 }
 
 func linkSkillsForKids() {

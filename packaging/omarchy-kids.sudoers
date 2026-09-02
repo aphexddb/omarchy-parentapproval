@@ -1,0 +1,4 @@
+# Kids may sudo, but PAM will demand a parent-phone signature.
+# timestamp_timeout=0 so each invocation is a new request.
+Defaults:%omarchy-kids timestamp_timeout=0
+%omarchy-kids ALL=(ALL:ALL) ALL

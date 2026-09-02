@@ -8,9 +8,8 @@ A community extra for Omarchy.
 
 Agents: load [`default/agents/skills/parentapproval/SKILL.md`](SKILL.md) (or run `sudo parentapproval install-skills`).
 
-first time setup
+first time setup (after the package is installed)
 ```bash
-sudo parentapproval enable
 sudo parentapproval pair
 sudo parentapproval setup-kid milo
 ```
@@ -50,7 +49,7 @@ To remove (package, overlay, skill links, daemon state):
 ./scripts/dev-uninstall
 ```
 
-`sudo make install` also writes to `/usr`. Prefer the package so systemd sysusers and the daemon unit are enabled.
+`sudo make install` also writes to `/usr`. Prefer the package so systemd sysusers, sudoers, PAM hooks, and the daemon unit are applied.
 
 Then teach coding agents the CLI:
 
@@ -63,12 +62,11 @@ That symlinks the skill into the parent’s and kids’ agent dirs (`~/.agents/s
 Then, as the parent (your wheel account, not the kid):
 
 ```bash
-sudo parentapproval enable
 sudo parentapproval pair          # scan; keys land in /var/lib via the systemd daemon
 sudo parentapproval setup-kid milo
 ```
 
-`ask`, `pending`, and `status` talk to the systemd daemon as a regular user. Pair, revoke, doctor, enable, disable, setup-kid, and install-skills need sudo. Use `--dev` only for an unprivileged local dry-run of the daemon.
+The package install applies PAM, sudoers, the `omarchy-kids` group, and the daemon. `ask`, `pending`, and `status` talk to the systemd daemon as a regular user. Pair, revoke, doctor, disable, setup-kid, and install-skills need sudo. Use `--dev` only for an unprivileged local dry-run of the daemon.
 
 Optional desktop overlay, so polkit and GUI prompts get the same QR card:
 
@@ -124,7 +122,7 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 | `parentapproval ask --cmd "…"` | Ask a parent; daemon runs the command as root |
 | `sudo parentapproval pair` | Pair a parent phone |
 | `sudo parentapproval setup-kid NAME` | Create/lock a kid user |
-| `sudo parentapproval enable` / `disable` | PAM, sudoers, systemd |
+| `sudo parentapproval disable` | Remove PAM hooks without uninstalling |
 | `parentapproval status` | Host id, relay, paired phones |
 | `sudo parentapproval revoke DEVICE_ID` | Drop a phone |
 | `sudo parentapproval doctor` | Check PAM order, daemon, relay |

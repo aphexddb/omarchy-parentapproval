@@ -4,8 +4,28 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestPAMBlockRoundTrip(t *testing.T) {
+	original := "auth      sufficient pam_unix.so\n"
+	once := pamLines() + original
+	if !strings.Contains(once, "parentapproval: kids skip password") || !strings.Contains(once, "pam_exec.so") {
+		t.Fatalf("missing PAM block:\n%s", once)
+	}
+	twice := pamLines() + stripPAM(once)
+	if once != twice {
+		t.Fatalf("patch should be idempotent\n%s\n---\n%s", once, twice)
+	}
+	stripped := stripPAM(once)
+	if strings.Contains(stripped, "parentapproval") || strings.Contains(stripped, "pam_exec.so") {
+		t.Fatalf("strip left our block:\n%s", stripped)
+	}
+	if stripped != original && stripped != original+"\n" {
+		t.Fatalf("strip should restore original, got %q", stripped)
+	}
+}
 
 func TestParseGroupMembersLine(t *testing.T) {
 	got := parseGroupMembersLine("omarchy-kids:x:978:milo,jack")

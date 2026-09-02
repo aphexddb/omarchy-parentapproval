@@ -8,7 +8,7 @@ import (
 func TestControlsRequireRoot(t *testing.T) {
 	controls := []string{
 		"pair", "revoke", "doctor",
-		"enable", "disable", "setup-kid", "install-skills",
+		"apply-hooks", "remove-hooks", "disable", "setup-kid", "install-skills",
 		"teardown-firewall",
 	}
 	for _, c := range controls {
@@ -26,6 +26,18 @@ func TestAskDoesNotRequireRoot(t *testing.T) {
 		if commandNeedsRoot(c) {
 			t.Errorf("%s is not a parent control and must stay unprivileged", c)
 		}
+	}
+}
+
+func TestUsageOmitsEnable(t *testing.T) {
+	var b strings.Builder
+	usage(&b)
+	s := b.String()
+	if strings.Contains(s, "\n  enable") || strings.Contains(s, "parentapproval enable") {
+		t.Fatal("enable was removed; the package applies hooks at install")
+	}
+	if !strings.Contains(s, "disable") {
+		t.Fatal("disable should remain to turn hooks off without uninstalling")
 	}
 }
 

@@ -44,8 +44,8 @@ if ! /usr/bin/parentapproval status; then
 fi
 echo
 echo "Next:"
-echo "  sudo /usr/bin/parentapproval enable"
-echo "  /usr/bin/parentapproval pair"
+echo "  sudo /usr/bin/parentapproval pair"
+echo "  sudo /usr/bin/parentapproval setup-kid <kid-username>"
 echo "  /usr/bin/parentapproval ask --cmd \"pacman -S cowsay\""
 echo
 echo "This checkout's bin/ may shadow PATH. Use /usr/bin/parentapproval."

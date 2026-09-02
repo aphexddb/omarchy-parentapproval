@@ -1,7 +1,7 @@
 # Maintainer: parentapproval contributors
 pkgname=parentapproval
 pkgver=0.1.0
-pkgrel=32
+pkgrel=33
 pkgdesc="Parent-phone approval for Omarchy kids accounts"
 arch=('x86_64' 'aarch64')
 url="https://github.com/aphexddb/omarchy-parentapproval"
@@ -13,6 +13,7 @@ optdepends=(
 )
 replaces=('omarchy-parentapproval')
 conflicts=('omarchy-parentapproval')
+backup=('etc/sudoers.d/omarchy-kids')
 install=packaging/parentapproval.install
 options=('!debug' '!emptydirs')
 # In-tree checkout: no release tarball. Directories cannot be listed in

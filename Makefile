@@ -42,6 +42,8 @@ install: check-root-install build
 	rm -f "$(DESTDIR)$(PREFIX)/lib/systemd/system/omarchy-parentapprovald.service"
 	install -Dm644 packaging/parentapproval.sysusers "$(DESTDIR)$(PREFIX)/lib/sysusers.d/parentapproval.conf"
 	rm -f "$(DESTDIR)$(PREFIX)/lib/sysusers.d/omarchy-parentapproval.conf"
+	install -d -m 750 "$(DESTDIR)/etc/sudoers.d"
+	install -m 440 packaging/omarchy-kids.sudoers "$(DESTDIR)/etc/sudoers.d/omarchy-kids"
 	install -Dm644 LICENSE "$(DESTDIR)$(PREFIX)/share/licenses/parentapproval/LICENSE"
 	install -Dm644 README.md "$(DESTDIR)$(PREFIX)/share/doc/parentapproval/README.md"
 	install -Dm644 AGENTS.md "$(DESTDIR)$(PREFIX)/share/doc/parentapproval/AGENTS.md"
@@ -52,8 +54,16 @@ install: check-root-install build
 	rm -rf "$(DESTDIR)$(PREFIX)/share/omarchy-parentapproval"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/doc/omarchy-parentapproval"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/licenses/omarchy-parentapproval"
+	@if [ -z "$(DESTDIR)" ]; then \
+		systemd-sysusers "$(PREFIX)/lib/sysusers.d/parentapproval.conf" >/dev/null 2>&1 || true; \
+		"$(PREFIX)/bin/$(BIN)" apply-hooks; \
+	fi
 
 uninstall: check-root-uninstall
+	@if [ -z "$(DESTDIR)" ] && [ -x "$(PREFIX)/bin/$(BIN)" ]; then \
+		"$(PREFIX)/bin/$(BIN)" remove-hooks || true; \
+	fi
+	rm -f "$(DESTDIR)/etc/sudoers.d/omarchy-kids"
 	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BIN)" "$(DESTDIR)$(PREFIX)/bin/omarchy-parentapproval"
 	rm -f "$(DESTDIR)$(PREFIX)/lib/systemd/system/parentapprovald.service"
 	rm -f "$(DESTDIR)$(PREFIX)/lib/systemd/system/omarchy-parentapprovald.service"

@@ -73,6 +73,10 @@ Laptop dials outbound. Server `{op:challenge, nonce}` (nonce is 32 random bytes,
 
 ## PAM
 
+The package install writes these hooks (and `/etc/sudoers.d/omarchy-kids`).
+Uninstall reverses them: unpatches PAM and removes the sudoers drop-in.
+Kid login accounts are left in place.
+
 Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`:
 
 ```
