@@ -131,6 +131,21 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 
 `parentapproval --help` is the flag-level source of truth.
 
+## Releases
+
+Linux **amd64** and **arm64** binaries (`parentapproval` and `parentapproval-relay`) are published with [GoReleaser](https://goreleaser.com) when a `v*` tag is pushed. No macOS or Windows builds.
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+Local dry-run (no GitHub upload):
+
+```bash
+make release-snapshot
+```
+
 ## What this is not
 
 - Not a login or lock-screen replacement. The kid still unlocks the session with their own password.

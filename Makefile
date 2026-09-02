@@ -6,7 +6,7 @@ VERSION := $(shell cat VERSION)
 GOFLAGS ?= -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build relay test install uninstall check-root-install check-root-uninstall
+.PHONY: all build relay test install uninstall check-root-install check-root-uninstall release-snapshot goreleaser-check
 
 all: build
 
@@ -34,6 +34,12 @@ relay:
 
 test:
 	go test ./cmd/... ./internal/... ./web
+
+goreleaser-check:
+	goreleaser check
+
+release-snapshot:
+	goreleaser release --snapshot --clean
 
 install: check-root-install build
 	install -Dm755 bin/$(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
