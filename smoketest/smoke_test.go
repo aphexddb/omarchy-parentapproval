@@ -250,30 +250,21 @@ func testAskDeny(t *testing.T) {
 
 func testWatchHomeAsk(t *testing.T) {
 	p := pairOnce(t)
+	created := createAsk(t, p.lap.sock, "pacman -S cowsay", 15)
+	rid := created["rid"].(string)
 	ctx, cancel := waitCtx()
 	defer cancel()
-	errCh := make(chan error, 1)
-	evCh := make(chan fakephone.WatchEvent, 1)
-	go func() {
-		ev, err := p.phone.WatchAsk(ctx, smokeOrigin, p.host)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		evCh <- ev
-	}()
-	time.Sleep(200 * time.Millisecond)
-	created := createAsk(t, p.lap.sock, "pacman -S cowsay", 15)
-	var ev fakephone.WatchEvent
-	select {
-	case err := <-errCh:
+	// Home page already open: GET /v1/watch must return this live ask, not a
+	// leftover token from an earlier subtest on the same seeded host_id.
+	ev, err := p.phone.WatchAsk(ctx, smokeOrigin, p.host)
+	if err != nil {
 		t.Fatal(err)
-	case ev = <-evCh:
-	case <-time.After(8 * time.Second):
-		t.Fatal("home page watch did not see the ask")
 	}
 	if ev.Kind != "ask" {
 		t.Fatalf("watch %+v", ev)
+	}
+	if ev.RID != "" && ev.RID != rid {
+		t.Fatalf("watch rid %s want %s", ev.RID, rid)
 	}
 	askURL := ev.URL
 	if askURL == "" {
@@ -285,7 +276,7 @@ func testWatchHomeAsk(t *testing.T) {
 	if err := p.phone.Approve(ctx, askURL, protocol.DecisionAllow); err != nil {
 		t.Fatal(err)
 	}
-	waited, err := daemon.Wait(p.lap.sock, created["rid"].(string))
+	waited, err := daemon.Wait(p.lap.sock, rid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +484,11 @@ func testBadData(t *testing.T) {
 		t.Fatalf("unauth allow accepted: %s", raw)
 	}
 
-	res, err = p.phone.PostJSON(ctx, smokeOrigin+"/p/"+p.sess.Token+"/handoff", []byte(`{"host_id":"h"}`))
+	_, liveToken, err := fakephone.ParseQR(qr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = p.phone.PostJSON(ctx, smokeOrigin+"/p/"+liveToken+"/handoff", []byte(`{"host_id":"h"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
