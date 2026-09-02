@@ -83,7 +83,6 @@ func pairPhone(t *testing.T, sock string, phone *Client) (*PairSession, protocol
 		t.Fatal(err)
 	}
 	qr, _ := started["qr_url"].(string)
-	laptopSAS, _ := started["sas"].(string)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	sess, err := phone.Pair(ctx, qr)
@@ -91,10 +90,17 @@ func pairPhone(t *testing.T, sock string, phone *Client) (*PairSession, protocol
 		t.Fatal(err)
 	}
 	t.Cleanup(sess.Close)
-	if sess.SAS != laptopSAS {
-		t.Fatalf("sas phone %q laptop %q", sess.SAS, laptopSAS)
+	if sess.SAS != phone.LocalSAS(sess.SID) {
+		t.Fatalf("sas phone %q local %q", sess.SAS, phone.LocalSAS(sess.SID))
 	}
-	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID)
+	st, err := daemon.PairStatus(sock, sess.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["sas"] != sess.SAS {
+		t.Fatalf("laptop sas %v want %q", st["sas"], sess.SAS)
+	}
+	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID, sess.SAS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,11 +146,15 @@ func TestCanonicalBytesMatchVectors(t *testing.T) {
 	watch := string(protocol.CanonicalWatch(
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"phone-1",
+		"AAAAAAAAAAAAAAAAAAAAAA",
 		1735689660,
 	))
-	wantWatch := "OMARCHY-WATCH/1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nphone-1\n1735689660\n"
+	wantWatch := "OMARCHY-WATCH/1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nphone-1\nAAAAAAAAAAAAAAAAAAAAAA\n1735689660\n"
 	if watch != wantWatch {
 		t.Fatalf("canonical watch mismatch\n got: %q\nwant: %q", watch, wantWatch)
+	}
+	if protocol.PairSAS("sid-aaaabbbbccccdddd", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") != "237103" {
+		t.Fatal("PairSAS vector drifted")
 	}
 }
 
@@ -268,7 +278,8 @@ func TestApproveRefusesBeforePOST(t *testing.T) {
 	mux.HandleFunc("/a/"+rid, func(w http.ResponseWriter, r *http.Request) {
 		evil := req
 		evil.Cmd = "visudo"
-		// stored cmd_hash still belongs to "true"
+		evil.Sealed = nil
+		// stored cmd_hash still belongs to "true"; no sealed box to restore it
 		_ = json.NewEncoder(w).Encode(evil)
 	})
 	posted := false
@@ -373,6 +384,56 @@ func TestWatchAfterPair(t *testing.T) {
 	}
 	if ev.RID != created["rid"] && ev.URL == "" {
 		t.Fatalf("watch missing ask %+v", ev)
+	}
+}
+
+func TestSealedAskHidesCleartext(t *testing.T) {
+	_, sock, _ := startRelayDaemon(t)
+	phone := NewSeeded()
+	pairPhone(t, sock, phone)
+	created, err := daemon.Create(sock, "milo", "sudo", "/", "pacman -S cowsay", 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = daemon.Cancel(sock, created["rid"].(string)) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wire, err := phone.FetchAskRaw(ctx, created["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.User != "" || wire.Cmd != "" || wire.CWD != "" || wire.HostName != "" {
+		t.Fatalf("cleartext leaked: %+v", wire)
+	}
+	shown, err := phone.FetchAsk(ctx, created["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown.Cmd != "pacman -S cowsay" {
+		t.Fatalf("unsealed cmd %q", shown.Cmd)
+	}
+	if _, err := protocol.OpenAsk(wire.Sealed[DeviceIDParent], NewStranger().Priv); err == nil {
+		t.Fatal("stranger opened parent box")
+	}
+}
+
+func TestSecondOfferRejected(t *testing.T) {
+	_, sock, _ := startRelayDaemon(t)
+	parent := NewSeeded()
+	started, err := daemon.PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess, err := parent.Pair(ctx, started["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sess.Close)
+	_, err = NewStranger().Pair(ctx, started["qr_url"].(string))
+	if err == nil {
+		t.Fatal("second offer accepted")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,11 @@ func TestSmoke(t *testing.T) {
 	t.Run("UnauthDeny", testUnauthDeny)
 	t.Run("Replay", testReplay)
 	t.Run("CommandSwap", testCommandSwap)
+	t.Run("SealedAsk", testSealedAsk)
+	t.Run("SASBoundToKey", testSASBoundToKey)
+	t.Run("WatchNonce", testWatchNonce)
+	t.Run("CreateUserFromPeer", testCreateUserFromPeer)
+	t.Run("ConfirmWrongSAS", testConfirmWrongSAS)
 	t.Run("BadData", testBadData)
 	t.Run("MiM", testMiM)
 	t.Run("PairAbort", testPairAbort)
@@ -83,8 +89,22 @@ func testHealthz(t *testing.T) {
 		t.Fatal("vapid publicKey empty")
 	}
 	code, body = getBody(t, smokeOrigin+"/app.js", "")
-	if code != 200 || !strings.Contains(string(body), "function bootPair") {
-		t.Fatalf("app.js embed missing bootPair (%d, %d bytes)", code, len(body))
+	js := string(body)
+	if code != 200 {
+		t.Fatalf("app.js %d", code)
+	}
+	for _, want := range []string{
+		"function bootPair",
+		"function pairSAS",
+		"function revealAsk",
+		"function openSealed",
+		"&nonce=",
+		"OMARCHY-SAS/1",
+		"OMARCHY-WATCH/1",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js missing %q", want)
+		}
 	}
 }
 
@@ -124,9 +144,11 @@ func testPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	qr, _ := started["qr_url"].(string)
-	sas, _ := started["sas"].(string)
 	if started["via"] != "relay" || !strings.Contains(qr, "/p/") {
 		t.Fatalf("start %+v", started)
+	}
+	if sas, _ := started["sas"].(string); sas != "" {
+		t.Fatalf("PairStart leaked SAS before offer: %q", sas)
 	}
 	code, html := getBody(t, qr, "text/html")
 	page := string(html)
@@ -141,17 +163,17 @@ func testPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(sess.Close)
-	if sess.SAS != sas {
-		t.Fatalf("sas phone %q laptop %q", sess.SAS, sas)
+	if sess.SAS != phone.LocalSAS(sess.SID) {
+		t.Fatalf("sas phone %q local %q", sess.SAS, phone.LocalSAS(sess.SID))
 	}
 	st, err := daemon.PairStatus(lap.sock, sess.SID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st["state"] != "pending_confirm" {
-		t.Fatalf("state %+v", st)
+	if st["state"] != "pending_confirm" || st["sas"] != sess.SAS {
+		t.Fatalf("state %+v want sas %q", st, sess.SAS)
 	}
-	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID)
+	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID, sess.SAS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,6 +397,15 @@ func testReplay(t *testing.T) {
 	}
 }
 
+func peerUser(t *testing.T) string {
+	t.Helper()
+	u, err := user.Current()
+	if err != nil || u.Username == "" {
+		t.Fatalf("current user: %v", err)
+	}
+	return u.Username
+}
+
 func testCommandSwap(t *testing.T) {
 	p := pairOnce(t)
 	created := createAsk(t, p.lap.sock, "true", 15)
@@ -397,6 +428,180 @@ func testCommandSwap(t *testing.T) {
 		t.Fatalf("command swap %s %s", res.Status, raw)
 	}
 	if _, err := daemon.Cancel(p.lap.sock, rid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testSealedAsk(t *testing.T) {
+	p := pairOnce(t)
+	created := createAsk(t, p.lap.sock, "pacman -S cowsay", 15)
+	ctx, cancel := shortCtx()
+	defer cancel()
+	wire, err := p.phone.FetchAskRaw(ctx, created["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.User != "" || wire.Cmd != "" || wire.CWD != "" || wire.HostName != "" {
+		t.Fatalf("relay saw cleartext ask: user=%q cmd=%q cwd=%q host=%q", wire.User, wire.Cmd, wire.CWD, wire.HostName)
+	}
+	blob, ok := wire.Sealed[fakephone.DeviceIDParent]
+	if !ok || blob == "" {
+		t.Fatalf("sealed missing parent entry: %+v", wire.Sealed)
+	}
+	if _, ok := wire.Sealed[fakephone.DeviceIDStranger]; ok {
+		t.Fatal("sealed blob for a phone that is not paired")
+	}
+	fields, err := protocol.OpenAsk(blob, p.phone.Priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields.Cmd != "pacman -S cowsay" || fields.User != peerUser(t) {
+		t.Fatalf("unsealed %+v", fields)
+	}
+	if _, err := protocol.OpenAsk(blob, fakephone.NewStranger().Priv); err == nil {
+		t.Fatal("stranger unsealed the parent box")
+	}
+	shown, err := p.phone.FetchAsk(ctx, created["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown.Cmd != "pacman -S cowsay" || shown.User != peerUser(t) {
+		t.Fatalf("revealed %+v", shown)
+	}
+	if _, err := daemon.Cancel(p.lap.sock, created["rid"].(string)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testSASBoundToKey(t *testing.T) {
+	p := pairOnce(t)
+	started, err := daemon.PairStart(p.lap.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := shortCtx()
+	defer cancel()
+	sess, err := p.phone.Pair(ctx, started["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sess.Close)
+	stranger := fakephone.NewStranger()
+	if stranger.LocalSAS(sess.SID) == sess.SAS {
+		t.Fatal("stranger key produced the same SAS")
+	}
+	if sess.SAS != protocol.PairSAS(sess.SID, protocol.B64(p.phone.Pub)) {
+		t.Fatal("offer SAS is not PairSAS(sid, offered pubkey)")
+	}
+	if _, err := daemon.PairAbort(p.lap.sock, sess.SID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testWatchNonce(t *testing.T) {
+	p := pairOnce(t)
+	ctx, cancel := shortCtx()
+	defer cancel()
+	q := url.Values{}
+	q.Set("host_id", p.host)
+	q.Set("device_id", p.phone.DeviceID)
+	q.Set("exp", "1")
+	q.Set("sig", "AA")
+	res, err := p.phone.WatchRaw(ctx, smokeOrigin, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("watch without nonce %s %s", res.Status, raw)
+	}
+	fresh := p.phone.WatchQuery(p.host)
+	res, err = p.phone.WatchRaw(ctx, smokeOrigin, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("first watch %s", res.Status)
+	}
+	res2, err := p.phone.WatchRaw(ctx, smokeOrigin, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = io.ReadAll(res2.Body)
+	res2.Body.Close()
+	if res2.StatusCode == http.StatusOK {
+		t.Fatalf("watch nonce replay accepted: %s", raw)
+	}
+	exp := time.Now().Unix() + protocol.WatchAuthMax + 30
+	nonce := make([]byte, protocol.WatchNonceMin)
+	for i := range nonce {
+		nonce[i] = byte(i + 1)
+	}
+	nonceB64 := protocol.B64(nonce)
+	canon := protocol.CanonicalWatch(p.host, p.phone.DeviceID, nonceB64, exp)
+	long := url.Values{}
+	long.Set("host_id", p.host)
+	long.Set("device_id", p.phone.DeviceID)
+	long.Set("nonce", nonceB64)
+	long.Set("exp", fmt.Sprintf("%d", exp))
+	long.Set("sig", protocol.B64(protocol.Sign(p.phone.Priv, canon)))
+	res, err = p.phone.WatchRaw(ctx, smokeOrigin, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	if res.StatusCode == http.StatusOK {
+		t.Fatal("over-long watch exp accepted")
+	}
+}
+
+func testCreateUserFromPeer(t *testing.T) {
+	p := pairOnce(t)
+	created := createAsk(t, p.lap.sock, "true", 15)
+	got, _ := created["user"].(string)
+	if got != peerUser(t) {
+		t.Fatalf("create user %q want peer %q (requested milo must be ignored)", got, peerUser(t))
+	}
+	if _, err := daemon.Cancel(p.lap.sock, created["rid"].(string)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testConfirmWrongSAS(t *testing.T) {
+	lap := startLaptop(t)
+	phone := fakephone.NewSeeded()
+	started, err := daemon.PairStart(lap.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := shortCtx()
+	defer cancel()
+	sess, err := phone.Pair(ctx, started["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sess.Close)
+	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID, "000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(conf.Body)
+	conf.Body.Close()
+	if conf.StatusCode == http.StatusOK {
+		t.Fatalf("wrong SAS accepted: %s", raw)
+	}
+	st, err := daemon.Status(lap.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parentsHas(st, fakephone.DeviceIDParent) {
+		t.Fatal("wrong SAS enrolled a parent")
+	}
+	if _, err := daemon.PairAbort(lap.sock, sess.SID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -446,7 +651,7 @@ func testBadData(t *testing.T) {
 		t.Fatalf("empty device %s %s", res.Status, raw)
 	}
 
-	conf, err := p.phone.Confirm(ctx, smokeOrigin, meta.SID)
+	conf, err := p.phone.Confirm(ctx, smokeOrigin, meta.SID, p.phone.LocalSAS(meta.SID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,19 +758,18 @@ func testMiM(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(parentSess.Close)
-	evilSess, err := stranger.Pair(ctx, qr)
-	if err != nil {
-		t.Fatal(err)
+	_, err = stranger.Pair(ctx, qr)
+	if err == nil || !strings.Contains(err.Error(), "409") && !strings.Contains(err.Error(), "offer already pending") {
+		t.Fatalf("second offer should be rejected, got %v", err)
 	}
-	t.Cleanup(evilSess.Close)
-	conf, err := p.phone.Confirm(ctx, parentSess.Origin, parentSess.SID)
+	conf, err := p.phone.Confirm(ctx, parentSess.Origin, parentSess.SID, parentSess.SAS)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := io.ReadAll(conf.Body)
 	conf.Body.Close()
-	if conf.StatusCode != http.StatusForbidden {
-		t.Fatalf("parent confirm after stranger overwrite: %s %s", conf.Status, raw)
+	if conf.StatusCode != http.StatusOK {
+		t.Fatalf("parent confirm after rejected stranger offer: %s %s", conf.Status, raw)
 	}
 
 	created := createAsk(t, p.lap.sock, "true", 15)
@@ -641,7 +845,7 @@ func testPairAbort(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Fatalf("abort %s", res.Status)
 	}
-	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID)
+	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID, sess.SAS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +873,13 @@ func testLaptopConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(sess.Close)
-	if _, err := daemon.PairConfirm(lap.sock, sess.SID); err != nil {
+	if _, err := daemon.PairConfirm(lap.sock, sess.SID, ""); err == nil {
+		t.Fatal("laptop confirm without SAS should fail")
+	}
+	if _, err := daemon.PairConfirm(lap.sock, sess.SID, "000000"); err == nil {
+		t.Fatal("laptop confirm with wrong SAS should fail")
+	}
+	if _, err := daemon.PairConfirm(lap.sock, sess.SID, sess.SAS); err != nil {
 		t.Fatal(err)
 	}
 	wctx, wcancel := waitCtx()

@@ -263,9 +263,11 @@ func pairOnce(t *testing.T) *paired {
 		t.Fatal(err)
 	}
 	qr, _ := started["qr_url"].(string)
-	sas, _ := started["sas"].(string)
 	if started["via"] != "relay" || !strings.HasPrefix(qr, smokeOrigin+"/p/") {
 		t.Fatalf("pair start %+v", started)
+	}
+	if sas, _ := started["sas"].(string); sas != "" {
+		t.Fatalf("PairStart must not reveal SAS before an offer: %q", sas)
 	}
 	ctx, cancel := shortCtx()
 	defer cancel()
@@ -275,10 +277,17 @@ func pairOnce(t *testing.T) *paired {
 		t.Fatal(err)
 	}
 	t.Cleanup(sess.Close)
-	if sess.SAS != sas {
-		t.Fatalf("sas phone %q laptop %q", sess.SAS, sas)
+	if sess.SAS != phone.LocalSAS(sess.SID) {
+		t.Fatalf("phone SAS %q != local PairSAS %q", sess.SAS, phone.LocalSAS(sess.SID))
 	}
-	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID)
+	st, err := daemon.PairStatus(lap.sock, sess.SID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["state"] != "pending_confirm" || st["sas"] != sess.SAS {
+		t.Fatalf("laptop SAS after offer %+v want %q", st, sess.SAS)
+	}
+	conf, err := phone.Confirm(ctx, sess.Origin, sess.SID, sess.SAS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +313,7 @@ func pairOnce(t *testing.T) *paired {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	st, err := daemon.Status(lap.sock)
+	st, err = daemon.Status(lap.sock)
 	if err != nil {
 		t.Fatal(err)
 	}

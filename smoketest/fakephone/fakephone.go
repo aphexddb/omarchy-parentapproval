@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -265,8 +266,12 @@ func (c *Client) Pair(ctx context.Context, qrURL string) (*PairSession, error) {
 	if err := json.Unmarshal(body, &offered); err != nil {
 		return nil, err
 	}
+	localSAS := protocol.PairSAS(meta.SID, protocol.B64(c.Pub))
 	if offered.SAS == "" {
 		return nil, errors.New("offer missing sas")
+	}
+	if offered.SAS != localSAS {
+		return nil, fmt.Errorf("pairing code mismatch: offer %q local %q", offered.SAS, localSAS)
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -324,9 +329,14 @@ func (c *Client) waitPair(ctx context.Context, origin, sid string) (protocol.Pai
 	return done, nil
 }
 
-// Confirm is the PWA path: POST /pair/{sid}/confirm with this phone's device_id.
-func (c *Client) Confirm(ctx context.Context, origin, sid string) (*http.Response, error) {
-	raw, _ := json.Marshal(map[string]string{"device_id": c.DeviceID})
+// LocalSAS is protocol.PairSAS(sid, this phone's pubkey), same as web/app.js pairSAS.
+func (c *Client) LocalSAS(sid string) string {
+	return protocol.PairSAS(sid, protocol.B64(c.Pub))
+}
+
+// Confirm is the PWA path: POST /pair/{sid}/confirm with {device_id, sas}.
+func (c *Client) Confirm(ctx context.Context, origin, sid, sas string) (*http.Response, error) {
+	raw, _ := json.Marshal(map[string]string{"device_id": c.DeviceID, "sas": sas})
 	return c.do(ctx, http.MethodPost, origin+"/pair/"+sid+"/confirm", map[string]string{
 		"Content-Type": "application/json",
 		"Accept":       "application/json",
@@ -423,8 +433,24 @@ func (c *Client) FetchAsk(ctx context.Context, qrURL string) (protocol.Request, 
 	return c.GetAsk(ctx, origin, meta.RID)
 }
 
-// GetAsk GETs /a/{rid} as JSON.
-func (c *Client) GetAsk(ctx context.Context, origin, rid string) (protocol.Request, error) {
+// FetchAskRaw is FetchAsk without unsealing (wire view the relay can see).
+func (c *Client) FetchAskRaw(ctx context.Context, qrURL string) (protocol.Request, error) {
+	origin, _, err := ParseQR(qrURL)
+	if err != nil {
+		return protocol.Request{}, err
+	}
+	meta, err := c.FetchMeta(ctx, qrURL)
+	if err != nil {
+		return protocol.Request{}, err
+	}
+	if meta.Kind != "ask" || meta.RID == "" {
+		return protocol.Request{}, fmt.Errorf("meta is not an ask: %+v", meta)
+	}
+	return c.GetAskRaw(ctx, origin, meta.RID)
+}
+
+// GetAskRaw GETs /a/{rid} as JSON without decrypting sealed fields.
+func (c *Client) GetAskRaw(ctx context.Context, origin, rid string) (protocol.Request, error) {
 	res, err := c.do(ctx, http.MethodGet, origin+"/a/"+rid, map[string]string{
 		"Accept": "application/json",
 	}, nil)
@@ -437,6 +463,44 @@ func (c *Client) GetAsk(ctx context.Context, origin, rid string) (protocol.Reque
 	}
 	var req protocol.Request
 	if err := json.Unmarshal(raw, &req); err != nil {
+		return protocol.Request{}, err
+	}
+	return req, nil
+}
+
+// RevealAsk decrypts sealed[device_id] into user/cwd/cmd/host_name, matching revealAsk.
+func (c *Client) RevealAsk(req *protocol.Request) error {
+	if req == nil {
+		return errors.New("nil request")
+	}
+	if req.Sealed != nil {
+		if blob := req.Sealed[c.DeviceID]; blob != "" {
+			fields, err := protocol.OpenAsk(blob, c.Priv)
+			if err != nil {
+				return err
+			}
+			req.User = fields.User
+			req.CWD = fields.CWD
+			req.Cmd = fields.Cmd
+			if fields.HostName != "" {
+				req.HostName = fields.HostName
+			}
+			return nil
+		}
+	}
+	if req.Cmd == "" || req.User == "" {
+		return errors.New("this ask has no command we can decrypt")
+	}
+	return nil
+}
+
+// GetAsk GETs /a/{rid} and unseals fields for this phone.
+func (c *Client) GetAsk(ctx context.Context, origin, rid string) (protocol.Request, error) {
+	req, err := c.GetAskRaw(ctx, origin, rid)
+	if err != nil {
+		return protocol.Request{}, err
+	}
+	if err := c.RevealAsk(&req); err != nil {
 		return protocol.Request{}, err
 	}
 	return req, nil
@@ -520,16 +584,28 @@ func (c *Client) DenyUnauth(ctx context.Context, qrURL string) error {
 	return nil
 }
 
-// Watch is one GET /v1/watch with a paired-phone signature (home page long-poll).
-func (c *Client) Watch(ctx context.Context, origin, hostID string) (WatchEvent, int, error) {
+// WatchQuery builds a one-time signed /v1/watch query (fresh nonce each call).
+func (c *Client) WatchQuery(hostID string) url.Values {
+	nonce := make([]byte, protocol.WatchNonceMin)
+	if _, err := rand.Read(nonce); err != nil {
+		panic(err)
+	}
 	exp := time.Now().Unix() + 60
-	canon := protocol.CanonicalWatch(hostID, c.DeviceID, exp)
+	nonceB64 := protocol.B64(nonce)
+	canon := protocol.CanonicalWatch(hostID, c.DeviceID, nonceB64, exp)
 	sig := protocol.Sign(c.Priv, canon)
 	q := url.Values{}
 	q.Set("host_id", hostID)
 	q.Set("device_id", c.DeviceID)
+	q.Set("nonce", nonceB64)
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("sig", protocol.B64(sig))
+	return q
+}
+
+// Watch is one GET /v1/watch with a paired-phone signature (home page long-poll).
+func (c *Client) Watch(ctx context.Context, origin, hostID string) (WatchEvent, int, error) {
+	q := c.WatchQuery(hostID)
 	res, err := c.do(ctx, http.MethodGet, strings.TrimRight(origin, "/")+"/v1/watch?"+q.Encode(), map[string]string{
 		"Accept": "application/json",
 	}, nil)
