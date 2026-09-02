@@ -229,19 +229,9 @@ func TestOneOutstandingPerUser(t *testing.T) {
 	}
 }
 
-func TestPairConfirm(t *testing.T) {
-	d, sock := startTestDaemon(t)
-	started, err := PairStart(sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sid := started["sid"].(string)
-	url := started["qr_url"].(string)
-	pub, _, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer := protocol.PairOffer{V: 1, DeviceID: "phone-1", Name: "Mom Pixel", Alg: "Ed25519", PubKey: protocol.B64(pub)}
+func offerPair(t *testing.T, url, deviceID, name string, pub ed25519.PublicKey) string {
+	t.Helper()
+	offer := protocol.PairOffer{V: 1, DeviceID: deviceID, Name: name, Alg: "Ed25519", PubKey: protocol.B64(pub)}
 	raw, _ := json.Marshal(offer)
 	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
 	if err != nil {
@@ -252,12 +242,48 @@ func TestPairConfirm(t *testing.T) {
 		b, _ := io.ReadAll(post.Body)
 		t.Fatalf("offer %s %s", post.Status, b)
 	}
+	var body map[string]any
+	if err := json.NewDecoder(post.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	sas, _ := body["sas"].(string)
+	if sas == "" {
+		t.Fatal("offer returned empty SAS")
+	}
+	return sas
+}
+
+func TestPairConfirm(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	url := started["qr_url"].(string)
+	if sas, _ := started["sas"].(string); sas != "" {
+		t.Fatalf("SAS must not exist before an offer: %q", sas)
+	}
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sas := offerPair(t, url, "phone-1", "Mom Pixel", pub)
+	if sas != protocol.PairSAS(sid, protocol.B64(pub)) {
+		t.Fatalf("sas %q want %q", sas, protocol.PairSAS(sid, protocol.B64(pub)))
+	}
 	st, err := PairStatus(sock, sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st["state"] != "pending_confirm" {
 		t.Fatalf("state %+v", st)
+	}
+	if st["name"] != "Mom Pixel" {
+		t.Fatalf("name %+v", st)
+	}
+	if st["sas"] != sas {
+		t.Fatalf("status sas %v want %s", st["sas"], sas)
 	}
 	pend, err := Pending(sock)
 	if err != nil {
@@ -266,7 +292,16 @@ func TestPairConfirm(t *testing.T) {
 	if pend["kind"] != "pair" || pend["state"] != "pending_confirm" {
 		t.Fatalf("pending after offer %+v", pend)
 	}
-	if _, err := PairConfirm(sock, sid); err != nil {
+	if pend["name"] != "Mom Pixel" || pend["match"] != sas {
+		t.Fatalf("pending %+v", pend)
+	}
+	if _, err := PairConfirm(sock, sid, ""); err == nil {
+		t.Fatal("confirm without SAS should fail")
+	}
+	if _, err := PairConfirm(sock, sid, "000000"); err == nil {
+		t.Fatal("confirm with wrong SAS should fail")
+	}
+	if _, err := PairConfirm(sock, sid, sas); err != nil {
 		t.Fatal(err)
 	}
 	if d.Store().ParentCount() != 1 {
@@ -286,17 +321,8 @@ func TestPairConfirmFromPhone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer := protocol.PairOffer{V: 1, DeviceID: "phone-2", Name: "Dad iPhone", Alg: "Ed25519", PubKey: protocol.B64(pub)}
-	raw, _ := json.Marshal(offer)
-	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	post.Body.Close()
-	if post.StatusCode != http.StatusAccepted {
-		t.Fatalf("offer %s", post.Status)
-	}
-	body, _ := json.Marshal(map[string]string{"device_id": "phone-2"})
+	sas := offerPair(t, url, "phone-2", "Dad iPhone", pub)
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-2", "sas": sas})
 	conf, err := http.Post(url+"/confirm", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +344,46 @@ func TestPairConfirmFromPhone(t *testing.T) {
 	}
 }
 
+func TestSecondPairOfferRejected(t *testing.T) {
+	_, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	url := started["qr_url"].(string)
+	pub1, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sas1 := offerPair(t, url, "phone-1", "Mom Pixel", pub1)
+	offer := protocol.PairOffer{V: 1, DeviceID: "phone-kid", Name: "Kid Phone", Alg: "Ed25519", PubKey: protocol.B64(pub2)}
+	raw, _ := json.Marshal(offer)
+	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer post.Body.Close()
+	if post.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(post.Body)
+		t.Fatalf("second offer %s %s", post.Status, b)
+	}
+	st, err := PairStatus(sock, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["name"] != "Mom Pixel" || st["sas"] != sas1 {
+		t.Fatalf("pending key was swapped: %+v", st)
+	}
+	if sas1 == protocol.PairSAS(sid, protocol.B64(pub2)) {
+		t.Fatal("kid key produced the same SAS as the parent key")
+	}
+}
+
 func TestPendingDuringPair(t *testing.T) {
 	_, sock := startTestDaemon(t)
 	started, err := PairStart(sock)
@@ -331,8 +397,8 @@ func TestPendingDuringPair(t *testing.T) {
 	if st["kind"] != "pair" {
 		t.Fatalf("pending %+v", st)
 	}
-	if st["match"] != started["sas"] {
-		t.Fatalf("match %v want %v", st["match"], started["sas"])
+	if st["match"] != "" {
+		t.Fatalf("SAS must be empty before an offer, got %v", st["match"])
 	}
 	if st["sid"] != started["sid"] {
 		t.Fatalf("sid %v", st["sid"])
@@ -769,7 +835,15 @@ func TestRelayPairAndAsk(t *testing.T) {
 	if st["state"] != "pending_confirm" {
 		t.Fatalf("state %+v", st)
 	}
-	if _, err := PairConfirm(sock, sid); err != nil {
+	var offered map[string]any
+	if err := json.NewDecoder(post.Body).Decode(&offered); err != nil {
+		t.Fatal(err)
+	}
+	sas, _ := offered["sas"].(string)
+	if sas != protocol.PairSAS(sid, protocol.B64(pub)) {
+		t.Fatalf("relay sas %q", sas)
+	}
+	if _, err := PairConfirm(sock, sid, sas); err != nil {
 		t.Fatal(err)
 	}
 
@@ -872,17 +946,8 @@ func TestWaitPushAfterSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer := protocol.PairOffer{V: 1, DeviceID: "phone-push", Name: "Mom Pixel", Alg: "Ed25519", PubKey: protocol.B64(pub)}
-	raw, _ := json.Marshal(offer)
-	post, err := http.Post(ts.URL+"/pair/"+sid, "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	post.Body.Close()
-	if post.StatusCode != http.StatusAccepted {
-		t.Fatalf("offer %s", post.Status)
-	}
-	body, _ := json.Marshal(map[string]string{"device_id": "phone-push"})
+	sas := offerPair(t, ts.URL+"/pair/"+sid, "phone-push", "Mom Pixel", pub)
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-push", "sas": sas})
 	conf, err := http.Post(ts.URL+"/pair/"+sid+"/confirm", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)

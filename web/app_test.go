@@ -32,6 +32,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"return bootPair(m.sid)",
 		"function offerPair",
 		"function waitForPair",
+		"function pairSAS",
+		"OMARCHY-SAS/1",
 		"function pairTokenFromPath",
 		"function fetchHandoff",
 		"function postHandoff",

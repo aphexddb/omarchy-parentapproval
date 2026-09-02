@@ -21,7 +21,7 @@ parentapproval ask --cmd "pacman -S cowsay"
 
 ## How it works
 
-1. **You pair once**, sitting at the laptop. Scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. Both screens show the same 6-digit code; confirm it on the phone so a stranger cannot swap in their own key.    
+1. **You pair once**, sitting at the laptop. Scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. The 6-digit code is derived from that key — a swapped key changes the digits. Confirm the code on the phone (or type those digits on the laptop overlay). The offering phone's name is shown so you can see whose key you are about to enroll.    
 2. **Add the page to Home Screen, tap Allow notifications.** `parentapproval pair` waits until notifications are on, then exits. After that the phone is a parent for this machine.
 3. **The kid hits sudo** (or a polkit prompt: pkexec, disks, package installs). They are in the `omarchy-kids` group, so PAM does not accept their login password. Login itself never phones a parent. The laptop asks the relay to notify paired phones.
 4. **Your phone buzzes.** Check the command and the match code, tap Approve. The phone signs the request the daemon already knows. One invocation, then it is spent. Replay is refuse.

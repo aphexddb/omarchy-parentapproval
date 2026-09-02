@@ -17,6 +17,7 @@ const (
 	Version         = 1
 	CanonicalPrefix = "OMARCHY-APPROVE/1"
 	WatchPrefix     = "OMARCHY-WATCH/1"
+	SASPrefix       = "OMARCHY-SAS/1"
 	DecisionAllow   = "allow"
 	DecisionDeny    = "deny"
 	DefaultAskTTL   = 120
@@ -49,6 +50,39 @@ func CmdHash(user, service, cwd, cmd string) []byte {
 	h.Write([]byte(cmd))
 	h.Write([]byte{0})
 	return h.Sum(nil)
+}
+
+// PairSAS is the 6-digit short-authentication string for a pairing offer.
+// It is SHA-256 of OMARCHY-SAS/1\n<sid>\n<pubkey>\n mapped to decimal digits
+// with rejection sampling. A substituted key yields different digits, so the
+// laptop and phone only match when they saw the same offered key.
+func PairSAS(sid, pubkeyB64 string) string {
+	h := sha256.Sum256([]byte(SASPrefix + "\n" + sid + "\n" + pubkeyB64 + "\n"))
+	return digitsFromHash(h[:], 6)
+}
+
+// digitsFromHash maps digest bytes to n decimal digits without modulo bias.
+// Bytes 250–255 are skipped (250 is the largest multiple of 10 that fits in a
+// byte). If the digest runs out, it is re-hashed with a counter.
+func digitsFromHash(sum []byte, n int) string {
+	out := make([]byte, 0, n)
+	block := sum
+	for counter := 0; len(out) < n; counter++ {
+		for _, b := range block {
+			if b >= 250 {
+				continue
+			}
+			out = append(out, '0'+b%10)
+			if len(out) == n {
+				return string(out)
+			}
+		}
+		h := sha256.New()
+		h.Write(sum)
+		h.Write([]byte{byte(counter + 1)})
+		block = h.Sum(nil)
+	}
+	return string(out)
 }
 
 // Canonical is the exact byte string the phone signs and the daemon verifies.

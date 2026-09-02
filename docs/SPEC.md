@@ -42,7 +42,22 @@ Opaque token URL: `https://parentapprovals.com/p/<token>`
 `GET /p/{token}/meta` returns `{kind, sid|rid}`. The PWA then calls the
 existing pair/ask routes on the same origin.
 
-`POST /pair/{sid}` with `{v, device_id, name, alg:"Ed25519", pubkey}`. Both screens show the same 6-digit SAS. The phone confirms (`POST /pair/{sid}/confirm`); the laptop overlay Y is a fallback. The pubkey is stored only after that confirm. `GET /pair/{sid}/wait` long-polls until then.
+`POST /pair/{sid}` with `{v, device_id, name, alg:"Ed25519", pubkey}`. The 6-digit SAS
+is six decimal digits from SHA-256 of these bytes (trailing newline after every
+field, including the last):
+
+```
+OMARCHY-SAS/1
+<sid>
+<pubkey base64url>
+```
+
+A substituted key yields different digits. A second offer while one is pending
+is rejected (no last-writer-wins swap). The phone computes the SAS locally from
+its key; the laptop shows the offering device name. Laptop overlay confirm
+requires typing the 6 digits from the phone (a bare Y does not enroll). The
+phone confirms with `{device_id, sas}` (`POST /pair/{sid}/confirm`). The pubkey
+is stored only after that confirm. `GET /pair/{sid}/wait` long-polls until then.
 
 After confirm, `parentapproval pair` waits until the phone has posted `POST /push/subscribe` (notifications allowed in the Home Screen app), then exits. The laptop sends `{op:expect-push}` and polls `{op:push-ready}`. The relay pushes `{op:subscribed}` when the phone subscribes.
 

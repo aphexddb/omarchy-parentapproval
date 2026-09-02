@@ -341,13 +341,12 @@ func cmdPair(args []string) error {
 		return err
 	}
 	sid, _ := started["sid"].(string)
-	sas, _ := started["sas"].(string)
 	url, _ := started["qr_url"].(string)
 	via, _ := started["via"].(string)
 	if url == "" {
 		return fmt.Errorf("daemon did not return a pairing URL")
 	}
-	box, err := qrdisp.Box("Scan with the parent's phone — not the kid's.", url, "Code  "+spaced(sas))
+	box, err := qrdisp.Box("Scan with the parent's phone — not the kid's.", url, "Code appears after the phone offers its key")
 	if err != nil {
 		return err
 	}
@@ -356,7 +355,7 @@ func cmdPair(args []string) error {
 		"kind":   "pair",
 		"user":   "",
 		"cmd":    "Pair a parent phone",
-		"match":  sas,
+		"match":  "",
 		"qr_url": url,
 	})
 	defer dismissDisplay()
@@ -388,12 +387,19 @@ func cmdPair(args []string) error {
 		switch st["state"] {
 		case "pending_confirm":
 			name, _ := st["name"].(string)
+			sas, _ := st["sas"].(string)
 			if !prompted {
-				fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
+				if name == "" {
+					name = "a phone"
+				}
+				fmt.Printf("\nPhone %q offered a key.\n", name)
+				if sas != "" {
+					fmt.Printf("Laptop code  %s  — this is bound to that phone's key.\n", spaced(sas))
+				}
 				if overlayOK {
-					fmt.Printf("Confirm the matching code  %s  on the phone, or press Y on the overlay.\n", spaced(sas))
+					fmt.Printf("Read the 6 digits off %s and type them on the overlay. A bare Y will not confirm.\n", name)
 				} else {
-					fmt.Printf("Confirm the matching code  %s  on the phone.\n", spaced(sas))
+					fmt.Printf("Confirm only if %s shows the same 6 digits. Confirm on the phone.\n", name)
 				}
 				prompted = true
 			}
@@ -460,7 +466,7 @@ func cmdPairConfirm(args []string) error {
 	if err := ensureDaemon(p.socket); err != nil {
 		return err
 	}
-	sid := pairSIDArg(args)
+	sid, sas := pairConfirmArgs(args)
 	if sid == "" {
 		st, err := daemon.Pending(p.socket)
 		if err != nil {
@@ -471,7 +477,10 @@ func cmdPairConfirm(args []string) error {
 	if sid == "" {
 		return fmt.Errorf("no pairing session")
 	}
-	done, err := daemon.PairConfirm(p.socket, sid)
+	if sas == "" {
+		return fmt.Errorf("type the 6-digit code from the phone (parentapproval pair-confirm SID CODE)")
+	}
+	done, err := daemon.PairConfirm(p.socket, sid, sas)
 	if err != nil {
 		return err
 	}
@@ -501,13 +510,46 @@ func cmdPairAbort(args []string) error {
 }
 
 func pairSIDArg(args []string) string {
+	sid, _ := pairConfirmArgs(args)
+	return sid
+}
+
+func pairConfirmArgs(args []string) (sid, sas string) {
+	var pos []string
 	for _, a := range args {
 		if a == "--dev" || strings.HasPrefix(a, "--") {
 			continue
 		}
-		return a
+		pos = append(pos, a)
 	}
-	return ""
+	if len(pos) == 0 {
+		return "", ""
+	}
+	if len(pos) == 1 {
+		if isPairSAS(pos[0]) {
+			return "", pos[0]
+		}
+		return pos[0], ""
+	}
+	if isPairSAS(pos[1]) {
+		return pos[0], pos[1]
+	}
+	if isPairSAS(pos[0]) {
+		return pos[1], pos[0]
+	}
+	return pos[0], pos[1]
+}
+
+func isPairSAS(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func cmdAsk(args []string) error {

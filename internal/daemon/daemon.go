@@ -127,6 +127,7 @@ type sockReq struct {
 	CWD      string `json:"cwd,omitempty"`
 	Cmd      string `json:"cmd,omitempty"`
 	TTLS     int    `json:"ttl_s,omitempty"`
+	SAS      string `json:"sas,omitempty"`
 }
 
 func Open(cfg Config) (*Daemon, error) {
@@ -407,7 +408,7 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 	case "pair-status":
 		return d.PairStatus(req.SID)
 	case "pair-confirm":
-		return d.PairConfirm(req.SID)
+		return d.PairConfirm(req.SID, req.SAS)
 	case "pair-abort":
 		d.PairAbort(req.SID)
 		return map[string]string{"result": "cancel"}, nil
@@ -506,12 +507,10 @@ func (d *Daemon) PairStart() (map[string]any, error) {
 	}
 	p := &pairSession{
 		SID: randomHex(16),
-		SAS: randomDigits(6),
 		Exp: time.Now().Add(time.Duration(protocol.DefaultPairTTL) * time.Second),
 	}
 	d.pairing = p
 	sid := p.SID
-	sas := p.SAS
 	exp := p.Exp
 	d.mu.Unlock()
 
@@ -557,7 +556,7 @@ func (d *Daemon) PairStart() (map[string]any, error) {
 	d.mu.Unlock()
 	return map[string]any{
 		"sid":    sid,
-		"sas":    sas,
+		"sas":    "",
 		"qr_url": url,
 		"exp":    exp.Unix(),
 		"listen": listen,
@@ -612,16 +611,20 @@ func (d *Daemon) PairStatus(sid string) (map[string]any, error) {
 	return map[string]any{"state": "waiting"}, nil
 }
 
-func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
+func (d *Daemon) PairConfirm(sid, sas string) (map[string]any, error) {
 	d.mu.Lock()
 	p := d.pairing
 	if p == nil || p.SID != sid {
 		d.mu.Unlock()
 		return nil, errors.New("no pairing session")
 	}
-	if p.Pending == nil {
+	if p.Pending == nil || p.SAS == "" {
 		d.mu.Unlock()
 		return nil, errors.New("no phone is waiting")
+	}
+	if sas == "" || sas != p.SAS {
+		d.mu.Unlock()
+		return nil, errors.New("type the 6-digit code from the phone")
 	}
 	parent := *p.Pending
 	d.mu.Unlock()
@@ -1358,6 +1361,7 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 func (d *Daemon) handlePairPhoneConfirm(w http.ResponseWriter, req *http.Request, sid string) {
 	var body struct {
 		DeviceID string `json:"device_id"`
+		SAS      string `json:"sas"`
 	}
 	_ = json.NewDecoder(io.LimitReader(req.Body, 1<<12)).Decode(&body)
 	d.mu.Lock()
@@ -1373,7 +1377,7 @@ func (d *Daemon) handlePairPhoneConfirm(w http.ResponseWriter, req *http.Request
 		return
 	}
 	d.mu.Unlock()
-	done, err := d.PairConfirm(sid)
+	done, err := d.PairConfirm(sid, body.SAS)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusConflict)
 		return
@@ -1432,12 +1436,18 @@ func (d *Daemon) handlePairOffer(w http.ResponseWriter, req *http.Request, sid s
 		writeJSON(w, d.pairing.Done)
 		return
 	}
+	if d.pairing.Pending != nil {
+		http.Error(w, `{"error":"offer already pending"}`, http.StatusConflict)
+		return
+	}
+	pubB64 := protocol.B64(pub)
 	d.pairing.Pending = &store.Parent{
 		DeviceID:  body.DeviceID,
 		Name:      body.Name,
-		PubKey:    protocol.B64(pub),
+		PubKey:    pubB64,
 		CreatedAt: time.Now().UTC(),
 	}
+	d.pairing.SAS = protocol.PairSAS(d.pairing.SID, pubB64)
 	d.writePendingLocked()
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]any{"ok": true, "state": "pending_confirm", "sas": d.pairing.SAS})
@@ -1622,8 +1632,8 @@ func PairStatus(socket, sid string) (map[string]any, error) {
 	return Call(socket, sockReq{Op: "pair-status", SID: sid})
 }
 
-func PairConfirm(socket, sid string) (map[string]any, error) {
-	return Call(socket, sockReq{Op: "pair-confirm", SID: sid})
+func PairConfirm(socket, sid, sas string) (map[string]any, error) {
+	return Call(socket, sockReq{Op: "pair-confirm", SID: sid, SAS: sas})
 }
 
 func PairAbort(socket, sid string) (map[string]any, error) {

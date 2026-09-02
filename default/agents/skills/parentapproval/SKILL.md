@@ -72,7 +72,7 @@ daemon (`~/.local/state` + a per-user socket).
 ## Setup (parent wheel account)
 
 ```bash
-sudo parentapproval pair          # scan, confirm the 6-digit code on the phone, allow notifications
+sudo parentapproval pair          # scan; compare the key-bound 6-digit code; confirm on the phone or type those digits on the overlay
 sudo parentapproval setup-kid milo
 sudo parentapproval install-skills
 ```

@@ -6,6 +6,51 @@ import (
 	"testing"
 )
 
+func TestPairSASVector(t *testing.T) {
+	// Frozen so the phone JS and Go cannot drift.
+	got := PairSAS("sid-aaaabbbbccccdddd", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if got != "237103" {
+		t.Fatalf("frozen SAS %q want 237103", got)
+	}
+	if len(got) != 6 {
+		t.Fatalf("len %d want 6: %q", len(got), got)
+	}
+	for _, r := range got {
+		if r < '0' || r > '9' {
+			t.Fatalf("non-digit %q in %q", r, got)
+		}
+	}
+	again := PairSAS("sid-aaaabbbbccccdddd", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if got != again {
+		t.Fatal("PairSAS not stable")
+	}
+	otherKey := PairSAS("sid-aaaabbbbccccdddd", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+	if otherKey == got {
+		t.Fatal("different pubkey produced the same SAS")
+	}
+	otherSID := PairSAS("sid-ffffffffffffffff", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if otherSID == got {
+		t.Fatal("different sid produced the same SAS")
+	}
+}
+
+func TestDigitsFromHashUnbiasedRange(t *testing.T) {
+	// 250–255 must not appear as digits via %10 without rejection.
+	sum := make([]byte, 32)
+	for i := range sum {
+		sum[i] = 255
+	}
+	got := digitsFromHash(sum, 6)
+	if len(got) != 6 {
+		t.Fatalf("len %d: %q", len(got), got)
+	}
+	for _, r := range got {
+		if r < '0' || r > '9' {
+			t.Fatalf("non-digit %q", r)
+		}
+	}
+}
+
 func TestCmdHashStable(t *testing.T) {
 	a := CmdHash("milo", "sudo", "/home/milo", "pacman -S steam")
 	b := CmdHash("milo", "sudo", "/home/milo", "pacman -S steam")
