@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func restoreDisplayHooks(t *testing.T) {
@@ -17,15 +16,13 @@ func restoreDisplayHooks(t *testing.T) {
 	oldOut := execCommandOutput
 	oldStart := execStart
 	oldCtx := execCommandContext
+	oldLookup := lookupGraphicalSession
 	t.Cleanup(func() {
 		binExists = oldExists
 		execCommandOutput = oldOut
 		execStart = oldStart
 		execCommandContext = oldCtx
-		watchDisplayClose(nil)
-		displayMu.Lock()
-		imvCmd = nil
-		displayMu.Unlock()
+		lookupGraphicalSession = oldLookup
 	})
 }
 
@@ -201,11 +198,11 @@ func TestPresentDisplayPrefersOverlay(t *testing.T) {
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
 	var started []string
 	binExists = func(path string) bool {
-		return path == "/usr/bin/omarchy-shell" || path == "/usr/bin/imv"
+		return path == "/usr/bin/omarchy-shell"
 	}
 	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
 		started = append(started, name+" "+strings.Join(args, " "))
-		if name == "omarchy-shell" && len(args) >= 2 && args[1] == "summon" {
+		if strings.Contains(name, "omarchy-shell") && len(args) >= 2 && args[1] == "summon" {
 			if !strings.Contains(args[len(args)-1], `"match":"515"`) {
 				t.Fatalf("summon payload missing match: %s", args[len(args)-1])
 			}
@@ -214,7 +211,7 @@ func TestPresentDisplayPrefersOverlay(t *testing.T) {
 		return "", nil
 	}
 	execStart = func(name string, args ...string) (*exec.Cmd, error) {
-		t.Fatalf("imv should not start when overlay summons: %s %v", name, args)
+		t.Fatalf("graphical QR must use the overlay, not %s %v", name, args)
 		return nil, nil
 	}
 	presentDisplay(map[string]any{
@@ -227,10 +224,58 @@ func TestPresentDisplayPrefersOverlay(t *testing.T) {
 	}
 }
 
-func TestPresentDisplayFallsBackToImv(t *testing.T) {
+func TestPresentDisplayAsRootUsesSession(t *testing.T) {
+	restoreDisplayHooks(t)
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", "")
+	lookupGraphicalSession = func() *graphicalSession {
+		return &graphicalSession{
+			uid: 1000, gid: 1000, user: "gardiner", home: "/home/gardiner",
+			runtimeDir: "/run/user/1000", wayland: "wayland-1",
+			omarchyPath: "/usr/share/omarchy",
+		}
+	}
+	var started []string
+	binExists = func(path string) bool {
+		return path == "/usr/bin/omarchy-shell"
+	}
+	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
+		started = append(started, name+" "+strings.Join(args, " "))
+		return "ok\n", nil
+	}
+	execStart = func(name string, args ...string) (*exec.Cmd, error) {
+		t.Fatalf("graphical QR must use the overlay, not %s %v", name, args)
+		return nil, nil
+	}
+	if !presentDisplay(map[string]any{
+		"kind": "pair", "cmd": "Pair a parent phone",
+		"qr_url": "https://parentapprovals.com/p/abc",
+	}) {
+		t.Fatal("expected overlay summon from the sudo user's session")
+	}
+	if !strings.Contains(strings.Join(started, "\n"), "summon parentapproval") {
+		t.Fatalf("started %q", started)
+	}
+}
+
+func TestPresentDisplayWithoutSessionDoesNothing(t *testing.T) {
+	restoreDisplayHooks(t)
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", "")
+	lookupGraphicalSession = func() *graphicalSession { return nil }
+	binExists = func(path string) bool { return true }
+	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
+		t.Fatalf("should not exec %s", name)
+		return "", nil
+	}
+	if presentDisplay(map[string]any{"qr_url": "https://parentapprovals.com/p/abc"}) {
+		t.Fatal("no graphical session")
+	}
+}
+
+func TestPresentDisplayNeverStartsImv(t *testing.T) {
 	restoreDisplayHooks(t)
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
-	started := false
 	binExists = func(path string) bool {
 		return path == "/usr/bin/omarchy-shell" || path == "/usr/bin/imv"
 	}
@@ -238,18 +283,14 @@ func TestPresentDisplayFallsBackToImv(t *testing.T) {
 		return "unknown\n", nil
 	}
 	execStart = func(name string, args ...string) (*exec.Cmd, error) {
-		if name != "imv" {
-			t.Fatalf("start %s", name)
-		}
-		started = true
-		return exec.Command("true"), nil
+		t.Fatalf("must not fall back to %s", name)
+		return nil, nil
 	}
-	presentDisplay(map[string]any{
+	if presentDisplay(map[string]any{
 		"cmd": "ping", "user": "gardiner", "match": "515",
 		"qr_url": "https://parentapprovals.com/p/abc",
-	})
-	if !started {
-		t.Fatal("expected imv fallback when overlay is not enabled")
+	}) {
+		t.Fatal("overlay summon failed; presentDisplay must not claim success")
 	}
 }
 
@@ -264,65 +305,6 @@ func TestDismissDisplayHidesOverlay(t *testing.T) {
 	dismissDisplay()
 	if len(args) < 3 || args[1] != "hide" || args[2] != "parentapproval" {
 		t.Fatalf("hide args %v", args)
-	}
-}
-
-func TestImvUserCloseSignals(t *testing.T) {
-	restoreDisplayHooks(t)
-	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
-	closed := make(chan struct{}, 1)
-	watchDisplayClose(func() { closed <- struct{}{} })
-	binExists = func(path string) bool { return path == "/usr/bin/imv" }
-	execCommandOutput = func(ctx context.Context, name string, args ...string) (string, error) {
-		return "unknown\n", nil
-	}
-	execStart = func(name string, args ...string) (*exec.Cmd, error) {
-		cmd := exec.Command("true")
-		if err := cmd.Start(); err != nil {
-			return nil, err
-		}
-		return cmd, nil
-	}
-	showPNG("https://parentapprovals.com/p/abc")
-	select {
-	case <-closed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("closing the QR window should abort pairing")
-	}
-}
-
-func TestDismissDisplayDoesNotSignalUserClose(t *testing.T) {
-	restoreDisplayHooks(t)
-	signaled := false
-	watchDisplayClose(func() { signaled = true })
-	binExists = func(path string) bool { return false }
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	displayMu.Lock()
-	imvCmd = cmd
-	displayMu.Unlock()
-	dismissDisplay()
-	time.Sleep(50 * time.Millisecond)
-	if signaled {
-		t.Fatal("killing the QR window ourselves must not abort pairing")
-	}
-}
-
-func TestDismissDisplayKillsImv(t *testing.T) {
-	restoreDisplayHooks(t)
-	binExists = func(path string) bool { return false }
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	displayMu.Lock()
-	imvCmd = cmd
-	displayMu.Unlock()
-	dismissDisplay()
-	if err := cmd.Wait(); err == nil {
-		t.Fatal("imv fallback should have been killed")
 	}
 }
 
@@ -353,6 +335,7 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		`root.verdict === "allow" ? "✓" : "✕"`,
 		`data.service === "polkit"`,
 		`data.service === "polkit-1"`,
+		`visible: root.qrSize > 0 && !(root.pairing && root.pairState === "pending_confirm")`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Panel.qml missing %q", want)
