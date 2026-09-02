@@ -27,6 +27,7 @@ var (
 	ParentSeed   = [32]byte{1: 1} // NewSeeded; DeviceID smoke-parent-1
 	HostSeed     = [32]byte{1: 2} // HostPrivate → StateDir/host.key
 	StrangerSeed = [32]byte{1: 3} // NewStranger; DeviceID stranger
+	HostSeedB    = [32]byte{1: 4} // HostPrivateB — second laptop for multi-host
 )
 
 const (
@@ -128,6 +129,11 @@ func HostPrivate() ed25519.PrivateKey {
 // HostPublic is the public half of HostPrivate.
 func HostPublic() ed25519.PublicKey {
 	return HostPrivate().Public().(ed25519.PublicKey)
+}
+
+// HostPrivateB is a second laptop host key so one phone can pair with two hosts.
+func HostPrivateB() ed25519.PrivateKey {
+	return ed25519.NewKeyFromSeed(HostSeedB[:])
 }
 
 // SecretB64 is the 64-byte private key as unpadded base64url (PWA IndexedDB secret).

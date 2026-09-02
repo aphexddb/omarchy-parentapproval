@@ -169,8 +169,13 @@ type laptop struct {
 
 func startLaptop(t *testing.T) *laptop {
 	t.Helper()
+	return startLaptopWithKey(t, fakephone.HostPrivate())
+}
+
+func startLaptopWithKey(t *testing.T, hostKey []byte) *laptop {
+	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "host.key"), fakephone.HostPrivate(), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "host.key"), hostKey, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sock := filepath.Join(dir, "pam.sock")
@@ -245,6 +250,10 @@ func waitCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
 }
 
+func longCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 20*time.Second)
+}
+
 type paired struct {
 	lap   *laptop
 	phone *fakephone.Client
@@ -255,8 +264,11 @@ type paired struct {
 
 func pairOnce(t *testing.T) *paired {
 	t.Helper()
-	lap := startLaptop(t)
-	phone := fakephone.NewSeeded()
+	return pairPhoneWithLaptop(t, startLaptop(t), fakephone.NewSeeded())
+}
+
+func pairPhoneWithLaptop(t *testing.T, lap *laptop, phone *fakephone.Client) *paired {
+	t.Helper()
 	started, err := daemon.PairStart(lap.sock)
 	if err != nil {
 		composeLogs(t)
@@ -305,6 +317,9 @@ func pairOnce(t *testing.T) *paired {
 	if done.DeviceID != fakephone.DeviceIDParent {
 		t.Fatalf("PairDone %+v", done)
 	}
+	if done.HostName == "" || done.HostName != wantHostName() {
+		t.Fatalf("PairDone host_name %q want %q", done.HostName, wantHostName())
+	}
 	if err := phone.PostHandoff(ctx, qr, fakephone.HandoffRecord{
 		HostID:   done.HostID,
 		HostName: done.HostName,
@@ -332,6 +347,14 @@ func parentsHas(st map[string]any, deviceID string) bool {
 		}
 	}
 	return false
+}
+
+func wantHostName() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "omarchy"
+	}
+	return h
 }
 
 func createAsk(t *testing.T, sock, cmd string, ttl int) map[string]any {

@@ -54,6 +54,9 @@ func TestSmoke(t *testing.T) {
 	t.Run("HomeScreenHandoff", testHomeScreenHandoff)
 	t.Run("AskAllow", testAskAllow)
 	t.Run("AskDeny", testAskDeny)
+	t.Run("AskHostname", testAskHostname)
+	t.Run("MultiHost", testMultiHost)
+	t.Run("PolkitNoQR", testPolkitNoQR)
 	t.Run("WatchHomeAsk", testWatchHomeAsk)
 	t.Run("UnpairedCannotAllow", testUnpairedCannotAllow)
 	t.Run("UnauthDeny", testUnauthDeny)
@@ -101,6 +104,14 @@ func testHealthz(t *testing.T) {
 		"&nonce=",
 		"OMARCHY-SAS/1",
 		"OMARCHY-WATCH/1",
+		"function renderHostList",
+		"function clearAllRecords",
+		"function showUnpairConfirm",
+		"async function saveRecord(hostId, rec)",
+		`$("host").textContent = req.host_name || rec.host_name`,
+		"req.host_name = fields.host_name || req.host_name",
+		`objectStore(STORE).clear()`,
+		`tx.objectStore(STORE).put(rec, hostId)`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js missing %q", want)
@@ -121,6 +132,16 @@ func testHomePage(t *testing.T) {
 		"home-unpaired",
 		"home-paired",
 		"sudo parentapproval pair",
+		`id="home-host-list"`,
+		`id="unpair-btn"`,
+		`id="unpair-confirm"`,
+		`id="unpair-confirm-btn"`,
+		`id="notify-setup-hosts"`,
+		`id="notify-setup-unpair-btn"`,
+		"Paired with",
+		"Request from",
+		`<h1 id="host">`,
+		"This deletes every parent key stored on this phone",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("home missing %q", want)
@@ -191,12 +212,18 @@ func testPair(t *testing.T) {
 	if done.DeviceID != fakephone.DeviceIDParent {
 		t.Fatalf("done %+v", done)
 	}
+	if done.HostName == "" || done.HostName != wantHostName() {
+		t.Fatalf("PairDone host_name %q want %q", done.HostName, wantHostName())
+	}
 	status, err := daemon.Status(lap.sock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !parentsHas(status, fakephone.DeviceIDParent) {
 		t.Fatalf("parents %+v", status["parents"])
+	}
+	if got, _ := status["host_name"].(string); got != wantHostName() {
+		t.Fatalf("status host_name %q want %q", got, wantHostName())
 	}
 }
 
@@ -207,6 +234,9 @@ func testHomeScreenHandoff(t *testing.T) {
 	rec, err := p.phone.FetchHandoff(ctx, p.sess.QRURL)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if rec.HostName == "" || rec.HostName != wantHostName() {
+		t.Fatalf("handoff host_name %q want %q", rec.HostName, wantHostName())
 	}
 	homePhone, err := fakephone.ClientFromHandoff(rec)
 	if err != nil {
@@ -267,6 +297,150 @@ func testAskDeny(t *testing.T) {
 	}
 	if waited["result"] != "deny" {
 		t.Fatalf("wait %+v", waited)
+	}
+}
+
+func testAskHostname(t *testing.T) {
+	p := pairOnce(t)
+	created := createAsk(t, p.lap.sock, "pacman -S cowsay", 15)
+	if got, _ := created["host"].(string); got != wantHostName() {
+		t.Fatalf("create host %q want %q", got, wantHostName())
+	}
+	ctx, cancel := shortCtx()
+	defer cancel()
+	wire, err := p.phone.FetchAskRaw(ctx, created["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.HostName != "" {
+		t.Fatalf("relay saw cleartext host_name %q", wire.HostName)
+	}
+	shown, err := p.phone.FetchAsk(ctx, created["qr_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown.HostName != wantHostName() {
+		t.Fatalf("approve host_name %q want %q", shown.HostName, wantHostName())
+	}
+	if _, err := daemon.Cancel(p.lap.sock, created["rid"].(string)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testMultiHost(t *testing.T) {
+	phone := fakephone.NewSeeded()
+	a := pairPhoneWithLaptop(t, startLaptopWithKey(t, fakephone.HostPrivate()), phone)
+	b := pairPhoneWithLaptop(t, startLaptopWithKey(t, fakephone.HostPrivateB()), phone)
+	if a.host == b.host {
+		t.Fatal("two laptops enrolled the same host_id")
+	}
+	if a.host == "" || b.host == "" {
+		t.Fatal("missing host_id after pair")
+	}
+
+	createdA := createAsk(t, a.lap.sock, "true", 15)
+	createdB := createAsk(t, b.lap.sock, "true", 15)
+	ctx, cancel := longCtx()
+	defer cancel()
+	evA, err := phone.WatchAsk(ctx, smokeOrigin, a.host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evA.RID != "" && evA.RID != createdA["rid"] {
+		t.Fatalf("watch A rid %s want %s (leaked host B?)", evA.RID, createdA["rid"])
+	}
+	if evA.RID == createdB["rid"] || strings.Contains(evA.URL, createdB["rid"].(string)) {
+		t.Fatalf("watch on host A returned host B ask: %+v", evA)
+	}
+	evB, err := phone.WatchAsk(ctx, smokeOrigin, b.host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evB.RID != "" && evB.RID != createdB["rid"] {
+		t.Fatalf("watch B rid %s want %s (leaked host A?)", evB.RID, createdB["rid"])
+	}
+	if evB.RID == createdA["rid"] || strings.Contains(evB.URL, createdA["rid"].(string)) {
+		t.Fatalf("watch on host B returned host A ask: %+v", evB)
+	}
+	if err := phone.Approve(ctx, createdA["qr_url"].(string), protocol.DecisionAllow); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.Approve(ctx, createdB["qr_url"].(string), protocol.DecisionAllow); err != nil {
+		t.Fatal(err)
+	}
+	waited, err := daemon.Wait(a.lap.sock, createdA["rid"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited["result"] != "allow" {
+		t.Fatalf("host A wait %+v", waited)
+	}
+	waited, err = daemon.Wait(b.lap.sock, createdB["rid"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited["result"] != "allow" {
+		t.Fatalf("host B wait %+v", waited)
+	}
+
+	if _, err := daemon.Revoke(a.lap.sock, fakephone.DeviceIDParent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.Create(a.lap.sock, "milo", "sudo", "/", "true", 15); err == nil {
+		t.Fatal("create on revoked host A should fail")
+	}
+	createdB2 := createAsk(t, b.lap.sock, "true", 15)
+	if err := phone.Approve(ctx, createdB2["qr_url"].(string), protocol.DecisionAllow); err != nil {
+		t.Fatal(err)
+	}
+	waited, err = daemon.Wait(b.lap.sock, createdB2["rid"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited["result"] != "allow" {
+		t.Fatalf("host B after A revoke %+v", waited)
+	}
+}
+
+func testPolkitNoQR(t *testing.T) {
+	p := pairOnce(t)
+	created, err := daemon.CreateAction(p.lap.sock, "milo", "polkit", "/", "/usr/bin/true", 15, "org.freedesktop.policykit.exec", "cookie-smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, _ := created["rid"].(string)
+	t.Cleanup(func() { _, _ = daemon.Cancel(p.lap.sock, rid) })
+	if created["via"] != "relay" {
+		t.Fatalf("via %+v", created)
+	}
+	qr, _ := created["qr_url"].(string)
+	if qr == "" || !strings.Contains(qr, "/p/") {
+		t.Fatalf("phone still needs a relay URL: %+v", created)
+	}
+	st, err := daemon.Pending(p.lap.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st["matrix"]; ok {
+		t.Fatalf("polkit pending must not include a QR matrix: %+v", st)
+	}
+	if _, ok := st["qr_url"]; ok {
+		t.Fatalf("polkit pending must not include qr_url: %+v", st)
+	}
+	if st["service"] != "polkit" {
+		t.Fatalf("service %v", st["service"])
+	}
+	ctx, cancel := shortCtx()
+	defer cancel()
+	if err := p.phone.Approve(ctx, qr, protocol.DecisionAllow); err != nil {
+		t.Fatal(err)
+	}
+	waited, err := daemon.Wait(p.lap.sock, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited["result"] != "allow" {
+		t.Fatalf("polkit wait %+v", waited)
 	}
 }
 
@@ -458,6 +632,9 @@ func testSealedAsk(t *testing.T) {
 	if fields.Cmd != "pacman -S cowsay" || fields.User != peerUser(t) {
 		t.Fatalf("unsealed %+v", fields)
 	}
+	if fields.HostName == "" || fields.HostName != wantHostName() {
+		t.Fatalf("unsealed host_name %q want %q", fields.HostName, wantHostName())
+	}
 	if _, err := protocol.OpenAsk(blob, fakephone.NewStranger().Priv); err == nil {
 		t.Fatal("stranger unsealed the parent box")
 	}
@@ -467,6 +644,9 @@ func testSealedAsk(t *testing.T) {
 	}
 	if shown.Cmd != "pacman -S cowsay" || shown.User != peerUser(t) {
 		t.Fatalf("revealed %+v", shown)
+	}
+	if shown.HostName != wantHostName() {
+		t.Fatalf("revealed host_name %q want %q", shown.HostName, wantHostName())
 	}
 	if _, err := daemon.Cancel(p.lap.sock, created["rid"].(string)); err != nil {
 		t.Fatal(err)
