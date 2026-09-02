@@ -81,6 +81,10 @@ base64url). The phone decrypts, displays, and hashes those fields. `POST /a/{rid
 
 TTL 120s. One outstanding request per user; a new one cancels the old.
 
+`create` over the unix socket sets `user` from `SO_PEERCRED` for
+unprivileged callers (the request field is ignored). Root may still pass
+`user` (PAM helper that did not drop privs). `pending.json` is `0600`.
+
 After `create`, the laptop sends `notify` on the WSS so the relay web-pushes paired phones.
 An already-open PWA does not wait for that push: it long-polls `GET /v1/watch` (signed;
 see below) and the relay (or local `--dev` HTTP) returns the ask as soon as it is opened.

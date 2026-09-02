@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,6 +52,15 @@ func startTestDaemon(t *testing.T) (*Daemon, string) {
 	}
 	t.Fatal("socket not ready")
 	return nil, ""
+}
+
+func callerUser(t *testing.T) string {
+	t.Helper()
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Username
 }
 
 func getAsk(t *testing.T, askURL string, priv ed25519.PrivateKey, deviceID string) protocol.Request {
@@ -126,7 +136,7 @@ func TestApproveAndReplay(t *testing.T) {
 	}
 
 	body := getAsk(t, url, priv, deviceID)
-	if body.User != "milo" || body.Cmd != "pacman -S steam" {
+	if body.User != callerUser(t) || body.Cmd != "pacman -S steam" {
 		t.Fatalf("request %+v", body)
 	}
 	hash := protocol.B64(protocol.CmdHash(body.User, body.Service, body.CWD, body.Cmd))
@@ -423,6 +433,54 @@ func TestCreateRequiresParent(t *testing.T) {
 	}
 }
 
+func TestCreateUserFromPeercred(t *testing.T) {
+	if _, err := createUser("spoof", 0, false); err == nil {
+		t.Fatal("create without peercred must fail")
+	}
+	got, err := createUser("root-may-set", 0, true)
+	if err != nil || got != "root-may-set" {
+		t.Fatalf("root override got %q %v", got, err)
+	}
+	uid := uint32(os.Getuid())
+	if uid == 0 {
+		t.Skip("running as root")
+	}
+	got, err = createUser("definitely-not-me", uid, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != callerUser(t) {
+		t.Fatalf("got %q want peer %q", got, callerUser(t))
+	}
+}
+
+func TestCreateIgnoresSpoofedUserAndPendingIsPrivate(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	enrollParent(t, d)
+	created, err := Create(sock, "definitely-not-me", "sudo", "/", "true", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created["user"] != callerUser(t) {
+		t.Fatalf("create user %+v", created["user"])
+	}
+	path := filepath.Join(d.cfg.StateDir, "pending.json")
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("pending.json mode %04o", st.Mode().Perm())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "definitely-not-me") {
+		t.Fatalf("pending used spoofed user: %s", raw)
+	}
+}
+
 func TestPendingShowsAskVerdict(t *testing.T) {
 	d, sock := startTestDaemon(t)
 	enrollParent(t, d)
@@ -477,7 +535,7 @@ func TestRedeemAfterAllow(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("deny %s", post.Status)
 	}
-	ok, err := Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	ok, err := Redeem(sock, callerUser(t), protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,14 +562,14 @@ func TestRedeemAfterAllow(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("allow %s %s", post.Status, b)
 	}
-	ok, err = Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	ok, err = Redeem(sock, callerUser(t), protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
 		t.Fatal("allow should mint a one-shot sudo grant")
 	}
-	ok, err = Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	ok, err = Redeem(sock, callerUser(t), protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,14 +599,14 @@ func TestRedeemPolkitServiceAfterAllow(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("allow %s", post.Status)
 	}
-	ok, err := RedeemService(sock, "milo", "polkit")
+	ok, err := RedeemService(sock, callerUser(t), "polkit")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
 		t.Fatal("polkit helper PAM should redeem the parent-approved grant even if cmdline is the helper")
 	}
-	ok, err = RedeemService(sock, "milo", "polkit")
+	ok, err = RedeemService(sock, callerUser(t), "polkit")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,28 +636,28 @@ func TestRedeemPolkitRequiresActionAndCookie(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("allow %s", post.Status)
 	}
-	ok, err := RedeemService(sock, "milo", "polkit")
+	ok, err := RedeemService(sock, callerUser(t), "polkit")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok {
 		t.Fatal("action-bound grant must not redeem without action/cookie")
 	}
-	ok, err = RedeemServiceAction(sock, "milo", "polkit", "org.freedesktop.packagekit.package-install", "cookie-a")
+	ok, err = RedeemServiceAction(sock, callerUser(t), "polkit", "org.freedesktop.packagekit.package-install", "cookie-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok {
 		t.Fatal("wrong action must not redeem")
 	}
-	ok, err = RedeemServiceAction(sock, "milo", "polkit", "org.freedesktop.policykit.exec", "cookie-b")
+	ok, err = RedeemServiceAction(sock, callerUser(t), "polkit", "org.freedesktop.policykit.exec", "cookie-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok {
 		t.Fatal("wrong cookie must not redeem")
 	}
-	ok, err = RedeemServiceAction(sock, "milo", "polkit", "org.freedesktop.policykit.exec", "cookie-a")
+	ok, err = RedeemServiceAction(sock, callerUser(t), "polkit", "org.freedesktop.policykit.exec", "cookie-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +688,7 @@ func TestExecGrantRunsApprovedCommand(t *testing.T) {
 		t.Fatalf("allow %s", post.Status)
 	}
 
-	st, err := Exec(sock, "milo", "sudo echo LLLOOLLL")
+	st, err := Exec(sock, callerUser(t), "sudo echo LLLOOLLL")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,10 +700,10 @@ func TestExecGrantRunsApprovedCommand(t *testing.T) {
 		t.Fatalf("exit %+v", st["exit"])
 	}
 
-	if _, err := Exec(sock, "milo", "sudo echo LLLOOLLL"); err == nil {
+	if _, err := Exec(sock, callerUser(t), "sudo echo LLLOOLLL"); err == nil {
 		t.Fatal("exec grant must be single-use")
 	}
-	if _, err := Exec(sock, "milo", "rm -rf /"); err == nil {
+	if _, err := Exec(sock, callerUser(t), "rm -rf /"); err == nil {
 		t.Fatal("unapproved command must not run")
 	}
 }

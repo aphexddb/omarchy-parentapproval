@@ -559,6 +559,8 @@ func cmdAsk(args []string) error {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--user":
+			// Ignored unless the process is root: the daemon takes the
+			// username from SO_PEERCRED so a kid cannot spoof attribution.
 			i++
 			if i < len(args) {
 				userName = args[i]

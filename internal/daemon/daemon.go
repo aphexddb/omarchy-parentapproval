@@ -368,6 +368,37 @@ func adminOp(op string) bool {
 	}
 }
 
+// createUser is the identity shown on the phone. Unprivileged callers cannot
+// pick it: SO_PEERCRED is the unix peer, and pam_exec seteuid runs as the kid.
+// Root (uid 0) may still pass user, for a PAM helper that did not drop privs.
+func createUser(requested string, uid uint32, uidOK bool) (string, error) {
+	if !uidOK {
+		return "", errors.New("create requires a local unix connection")
+	}
+	if uid != 0 {
+		name, err := usernameForUID(uid)
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve calling user: %w", err)
+		}
+		return name, nil
+	}
+	if requested == "" {
+		return "", errors.New("user required")
+	}
+	return requested, nil
+}
+
+func usernameForUID(uid uint32) (string, error) {
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		return "", err
+	}
+	if u.Username == "" {
+		return "", errors.New("empty username")
+	}
+	return u.Username, nil
+}
+
 func authorizeAdminRPC(uid uint32, uidOK bool) error {
 	if !uidOK {
 		return errors.New("pairing and revoke require a local unix connection")
@@ -419,7 +450,11 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		d.PairAbort(req.SID)
 		return map[string]string{"result": "cancel"}, nil
 	case "create":
-		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS, req.Action, req.Cookie)
+		userName, err := createUser(req.User, uid, uidOK)
+		if err != nil {
+			return nil, err
+		}
+		return d.Create(userName, req.Service, req.CWD, req.Cmd, req.TTLS, req.Action, req.Cookie)
 	case "redeem":
 		if req.Service != "" && req.Cmd == "" {
 			return map[string]any{"ok": d.RedeemService(req.User, req.Service, req.Action, req.Cookie)}, nil
@@ -1598,7 +1633,10 @@ func (d *Daemon) writePendingLocked() {
 		return
 	}
 	payload, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.WriteFile(path, payload, 0o644)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return
+	}
+	_ = os.Chmod(path, 0o600)
 }
 
 func (d *Daemon) clearPending() {
