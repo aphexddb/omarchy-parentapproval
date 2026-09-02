@@ -33,6 +33,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"history.replaceState",
 		"listRecords()",
 		`You'll get a buzz when a kid needs permission.`,
+		"function copyText",
+		".copy-btn",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("app.js missing %q", want)
@@ -53,6 +55,9 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`id="result-title"`,
 		`<h1>Paired</h1>`,
 		`sudo parentapproval pair`,
+		`Get started`,
+		`curl -fsSL https://parentapprovals.com/install | bash`,
+		`class="copy-btn"`,
 	} {
 		if !strings.Contains(htmlS, want) {
 			t.Errorf("index.html missing %q", want)
@@ -67,5 +72,19 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	}
 	if !strings.Contains(string(man), `/?homescreen=1`) {
 		t.Error("manifest start_url should mark Home Screen launches")
+	}
+	inst, err := FS.ReadFile("install")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(inst)
+	if !strings.HasPrefix(script, "#!/bin/bash") {
+		t.Error("install script missing shebang")
+	}
+	if !strings.Contains(script, "scripts/dev-install") {
+		t.Error("install script should run scripts/dev-install")
+	}
+	if !strings.Contains(script, "github.com/aphexddb/omarchy-parentapproval") {
+		t.Error("install script missing repo URL")
 	}
 }

@@ -50,6 +50,50 @@ function banner(el, kind, text) {
   el.textContent = text;
 }
 
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      if (!document.execCommand("copy")) reject(new Error("copy failed"));
+      else resolve();
+    } catch (err) {
+      reject(err);
+    } finally {
+      ta.remove();
+    }
+  });
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".copy-btn");
+  if (!btn) return;
+  const box = btn.closest("[data-copy]");
+  if (!box) return;
+  e.preventDefault();
+  const text = box.getAttribute("data-copy");
+  if (!text) return;
+  try {
+    await copyText(text);
+    box.classList.add("copied");
+    btn.setAttribute("aria-label", "Copied");
+    setTimeout(() => {
+      box.classList.remove("copied");
+      btn.setAttribute("aria-label", "Copy command");
+    }, 1500);
+  } catch (err) {
+    /* ignore */
+  }
+});
+
 const DB_NAME = "parentapproval";
 const STORE = "keys";
 

@@ -97,6 +97,35 @@ func TestHealthzAndVAPID(t *testing.T) {
 	}
 }
 
+func TestInstallScript(t *testing.T) {
+	_, ts := newTestRelay(t)
+	res, err := http.Get(ts.URL + "/install")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("install %s", res.Status)
+	}
+	if !strings.HasPrefix(res.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("content-type %q", res.Header.Get("Content-Type"))
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if !strings.HasPrefix(s, "#!/bin/bash") {
+		t.Fatalf("shebang: %q", s[:min(40, len(s))])
+	}
+	if !strings.Contains(s, "curl -fsSL https://parentapprovals.com/install | bash") {
+		t.Error("install script should document the curl command")
+	}
+	if !strings.Contains(s, "scripts/dev-install") {
+		t.Error("install script should exec scripts/dev-install")
+	}
+}
+
 func TestVAPIDNeverRotates(t *testing.T) {
 	dir := t.TempDir()
 	s1, err := New(Config{PublicURL: "http://x", DataDir: dir, Web: web.FS})

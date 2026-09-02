@@ -806,6 +806,10 @@ func (s *Server) writeWeb(w http.ResponseWriter, name string) {
 	case ".svg":
 		ctype = "image/svg+xml"
 	}
+	if name == "install" {
+		ctype = "text/plain; charset=utf-8"
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")

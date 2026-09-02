@@ -36,16 +36,56 @@ body {
 }
 h1 { font-size: 28px; letter-spacing: -0.03em; margin: 0 0 8px; }
 .lead { color: var(--muted); margin: 0 0 22px; line-height: 1.45; }
-.cmd-setup {
-  text-align: center;
-  user-select: all;
-  -webkit-user-select: all;
+.cmd-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 0 18px;
+  padding: 8px 8px 8px 14px;
+  text-align: left;
+  overflow-wrap: normal;
   background: var(--card);
   border: 1px solid var(--line);
-  overflow-wrap: normal;
-  white-space: nowrap;
 }
+.cmd-copy code {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font: inherit;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  background: none;
+  color: inherit;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.cmd-copy button.copy-btn {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cmd-copy button.copy-btn:hover,
+.cmd-copy button.copy-btn:focus-visible {
+  color: var(--ink);
+  background: #0b0d10;
+}
+.cmd-copy button.copy-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.cmd-copy .icon-check { display: none; }
+.cmd-copy.copied .icon-copy { display: none; }
+.cmd-copy.copied .icon-check { display: block; }
+.cmd-copy.copied button.copy-btn { color: var(--approve); }
 .home-links {
   display: flex;
   align-items: center;

@@ -1,0 +1,45 @@
+#!/bin/bash
+# Install parentapproval on Omarchy / Arch.
+# curl -fsSL https://parentapprovals.com/install | bash
+set -euo pipefail
+
+repo="${PARENTAPPROVAL_REPO:-https://github.com/aphexddb/omarchy-parentapproval.git}"
+ref="${PARENTAPPROVAL_REF:-main}"
+dir="${PARENTAPPROVAL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/parentapproval}"
+
+if [[ ! -t 0 && -r /dev/tty ]]; then
+  exec </dev/tty
+fi
+
+if (( EUID == 0 )); then
+  echo "parentapproval: do not run as root. The installer will ask for sudo." >&2
+  exit 1
+fi
+
+if ! command -v pacman >/dev/null; then
+  echo "parentapproval: Arch Linux or Omarchy is required (pacman not found)." >&2
+  exit 1
+fi
+
+if ! command -v git >/dev/null || ! command -v makepkg >/dev/null; then
+  echo "Installing git and base-devel (sudo)."
+  sudo pacman -Sy --noconfirm --needed git base-devel
+fi
+
+mkdir -p "$(dirname "$dir")"
+if [[ -d $dir/.git ]] && git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+  echo "Updating $dir"
+  if git -C "$dir" fetch --depth=1 origin "$ref" && git -C "$dir" checkout -B "$ref" FETCH_HEAD; then
+    :
+  else
+    echo "Fresh clone of $repo"
+    rm -rf "$dir"
+    git clone --depth=1 --branch "$ref" "$repo" "$dir"
+  fi
+else
+  echo "Cloning $repo"
+  rm -rf "$dir"
+  git clone --depth=1 --branch "$ref" "$repo" "$dir"
+fi
+
+exec "$dir/scripts/dev-install"

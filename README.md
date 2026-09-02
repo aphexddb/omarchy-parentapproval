@@ -35,7 +35,13 @@ Wheel parents still type a password. The approval path is only for `omarchy-kids
 
 ## Install
 
-Arch / Omarchy package. Writes to `/usr`. Pacman needs sudo.
+On Omarchy / Arch:
+
+```bash
+curl -fsSL https://parentapprovals.com/install | bash
+```
+
+That clones the repo, builds the package, and installs it with pacman. From a checkout, the same path is:
 
 ```bash
 ./scripts/dev-install
