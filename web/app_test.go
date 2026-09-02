@@ -2,6 +2,7 @@ package web
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -14,6 +15,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	s := string(raw)
 	for _, want := range []string{
 		"function resumePaired",
+		"function shouldApplyPairHandoff",
+		"A Safari visit to / must not enter",
 		"function pushNeedsStandalone",
 		"function settleHomeURL",
 		"function showNotifySetup",
@@ -115,6 +118,49 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	}
 	if !strings.Contains(script, "github.com/aphexddb/omarchy-parentapproval") {
 		t.Error("install script missing repo URL")
+	}
+}
+
+func TestSafariRootShowsHomeNotOnboarding(t *testing.T) {
+	raw, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	resumeStart := strings.Index(s, "async function resumePaired()")
+	bootStart := strings.Index(s, "async function boot()")
+	offerStart := strings.Index(s, "async function offerPair(")
+	if resumeStart < 0 || bootStart < 0 || offerStart < 0 || resumeStart >= bootStart || bootStart >= offerStart {
+		t.Fatal("could not locate resumePaired/boot/offerPair")
+	}
+	resume := s[resumeStart:bootStart]
+	if strings.Contains(resume, "wireA2HS") {
+		t.Error("resumePaired must not send Safari visitors into A2HS onboarding")
+	}
+	if !strings.Contains(resume, "showIdle([])") {
+		t.Error("iOS Safari should render the public unpaired home, not paired onboarding")
+	}
+	boot := s[bootStart:offerStart]
+	if !strings.Contains(boot, "shouldApplyPairHandoff()") {
+		t.Error("boot should only replay pair handoff in the Home Screen app")
+	}
+	if !strings.Contains(s, "function shouldApplyPairHandoff() {\n  return isStandalone();\n}") {
+		t.Error("pair handoff belongs to the standalone Home Screen app, not Safari")
+	}
+	if !strings.Contains(s, "} else if (pushNeedsStandalone()) {\n    wireA2HS([rec]);") {
+		t.Error("finishPair should still coach A2HS immediately after a Safari pair")
+	}
+}
+
+func TestSafariHomeSimulation(t *testing.T) {
+	cmd := exec.Command("node", "safari_home_sim.mjs")
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("safari_home_sim: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("unexpected sim output: %s", out)
 	}
 }
 

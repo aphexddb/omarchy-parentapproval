@@ -245,6 +245,13 @@ function pushNeedsStandalone() {
   return isIOS() && !isStandalone();
 }
 
+// Safari on iPhone is the public website. The paired parent app is the
+// Home Screen icon (standalone). A Safari visit to / must not enter
+// pairing / A2HS onboarding.
+
+// Safari on iPhone is the public website. The paired parent app is the
+// Home Screen icon (standalone). Do not treat a Safari visit as onboarding.
+
 function settleHomeURL() {
   if (location.pathname !== "/") {
     history.replaceState({}, "", "/");
@@ -514,18 +521,23 @@ function maybeResumeIdle() {
   }
 }
 
+function shouldApplyPairHandoff() {
+  return isStandalone();
+}
+
 async function resumePaired() {
   settleHomeURL();
   const recs = await hydrateRecords();
-  if (recs && recs.length) startWatch(recs);
   if (isStandalone() && !notificationsGranted()) {
+    if (recs && recs.length) startWatch(recs);
     showNotifySetup(recs);
     return;
   }
   if (pushNeedsStandalone()) {
-    wireA2HS(recs);
+    showIdle([]);
     return;
   }
+  if (recs && recs.length) startWatch(recs);
   showIdle(recs);
 }
 
@@ -543,7 +555,10 @@ async function boot() {
     const handed = await fetchHandoff(token);
     if (handed) {
       await saveRecord(handed.host_id, handed);
-      return finishPair("", handed);
+      if (shouldApplyPairHandoff()) {
+        return finishPair("", handed);
+      }
+      return resumePaired();
     }
     try {
       const meta = await fetch("/p/" + token + "/meta");
