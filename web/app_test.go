@@ -19,6 +19,12 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"function hydrateRecords",
 		"function writeBridge",
 		"function wireA2HS",
+		"function showIdle",
+		"function showDecision",
+		"function maybeResumeIdle",
+		"function wireHomeNotify",
+		"if (tick()) return",
+		`open.id === "result" || open.id === "gone"`,
 		"return bootPair(m.sid)",
 		"function offerPair",
 		"function waitForPair",
@@ -26,6 +32,7 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		"display-mode: fullscreen",
 		"history.replaceState",
 		"listRecords()",
+		`You'll get a buzz when a kid needs permission.`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("app.js missing %q", want)
@@ -35,14 +42,21 @@ func TestPWAPromptsNotifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(html), `id="gone-home"`) {
-		t.Error("index.html missing gone-home")
-	}
-	if !strings.Contains(string(html), `id="notify-setup"`) {
-		t.Error("index.html missing notify-setup")
-	}
-	if !strings.Contains(string(html), `id="a2hs-msg"`) {
-		t.Error("index.html missing a2hs-msg")
+	htmlS := string(html)
+	for _, want := range []string{
+		`id="gone-home"`,
+		`id="notify-setup"`,
+		`id="a2hs-msg"`,
+		`id="home-unpaired"`,
+		`id="home-paired"`,
+		`id="home-paired-hint"`,
+		`id="result-title"`,
+		`<h1>Paired</h1>`,
+		`sudo parentapproval pair`,
+	} {
+		if !strings.Contains(htmlS, want) {
+			t.Errorf("index.html missing %q", want)
+		}
 	}
 	man, err := FS.ReadFile("manifest.webmanifest")
 	if err != nil {

@@ -306,12 +306,29 @@ function showNotifySetup(recs) {
   wireNotifyButton($("notify-setup-btn"), rec && rec.host_id, rec && rec.device_id, $("notify-setup-msg"));
 }
 
+let idleTimer = 0;
+
+function clearIdleTimer() {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = 0;
+  }
+}
+
+function showIdleSoon(ms) {
+  clearIdleTimer();
+  idleTimer = setTimeout(() => {
+    idleTimer = 0;
+    resumePaired();
+  }, ms);
+}
+
 function showGone() {
+  settleHomeURL();
   show("gone");
   const btn = $("gone-home");
   if (!btn) return;
   btn.onclick = async () => {
-    settleHomeURL();
     await resumePaired();
   };
 }
@@ -327,11 +344,87 @@ function wireA2HS(recs) {
   };
 }
 
+function wireHomeNotify(rec) {
+  const btn = $("home-notify-btn");
+  const row = $("home-notify-row");
+  const hint = $("home-paired-hint");
+  const granted = notificationsGranted();
+  if (hint) {
+    hint.textContent = granted
+      ? "You'll get a buzz when a kid needs permission."
+      : "Enable notifications so this phone can buzz.";
+  }
+  if (row) row.classList.toggle("hidden", granted);
+  if (!btn || granted) return;
+  btn.disabled = false;
+  btn.classList.remove("hidden");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await enableNotifications(rec.host_id, rec.device_id, $("home-notify-msg"));
+      wireHomeNotify(rec);
+    } catch (err) {
+      banner($("home-notify-msg"), "err", err.message || String(err));
+      btn.disabled = false;
+    }
+  };
+}
+
+function showIdle(recs) {
+  show("home");
+  const msg = $("home-notify-msg");
+  if (msg) {
+    msg.textContent = "";
+    msg.className = "";
+  }
+  const paired = recs && recs.length > 0;
+  $("home-unpaired").classList.toggle("hidden", paired);
+  $("home-paired").classList.toggle("hidden", !paired);
+  if (!paired) return;
+  $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
+  const rec = recs[0];
+  wireHomeNotify(rec);
+  if (notificationsGranted()) {
+    enableNotifications(rec.host_id, rec.device_id, null).catch(() => {});
+  }
+}
+
+function showDecision(decision) {
+  const allowed = decision === "allow";
+  $("result-title").textContent = allowed ? "Approved" : "Denied";
+  $("result-text").textContent = allowed ? "The laptop can continue." : "The request was denied.";
+  show("result");
+  settleHomeURL();
+  const el = $("result");
+  el.onclick = () => {
+    clearIdleTimer();
+    el.onclick = null;
+    resumePaired();
+  };
+  showIdleSoon(2200);
+}
+
+function openSection() {
+  return document.querySelector("section:not(.hidden)");
+}
+
+function maybeResumeIdle() {
+  const open = openSection();
+  if (!open) return;
+  if (open.id === "result" || open.id === "gone") {
+    clearIdleTimer();
+    resumePaired();
+    return;
+  }
+  if (isStandalone() && !notificationsGranted()) {
+    if (open.id === "home" || open.id === "a2hs" || open.id === "pair-done") {
+      resumePaired();
+    }
+  }
+}
+
 async function resumePaired() {
   settleHomeURL();
-  if (isStandalone() && !notificationsGranted()) {
-    showNotifySetup([]);
-  }
   const recs = await hydrateRecords();
   if (isStandalone() && !notificationsGranted()) {
     showNotifySetup(recs);
@@ -341,27 +434,11 @@ async function resumePaired() {
     wireA2HS(recs);
     return;
   }
-  show("home");
-  if (isStandalone() && !notificationsGranted()) {
-    showNotifySetup(recs);
-    return;
-  }
-  if (!recs.length) return;
-  $("home-paired").classList.remove("hidden");
-  $("home-hosts").textContent = recs.map((r) => r.host_name || "laptop").join(", ");
-  const rec = recs[0];
-  wireNotifyButton($("home-notify-btn"), rec.host_id, rec.device_id, $("home-paired"));
-  wireNotifyButton($("notify-btn"), rec.host_id, rec.device_id, $("notify-msg"));
-  if (notificationsGranted()) {
-    try {
-      await enableNotifications(rec.host_id, rec.device_id, $("home-paired"));
-    } catch (e) {
-      /* subscribe can be retried from the button */
-    }
-  }
+  showIdle(recs);
 }
 
 async function boot() {
+  clearIdleTimer();
   registerSW();
   const path = location.pathname.replace(/\/+$/, "");
   if (!hasSign()) {
@@ -516,7 +593,14 @@ async function bootPair(sid) {
 }
 
 async function bootApprove(rid) {
+  clearIdleTimer();
   show("approve");
+  $("approve-btn").disabled = false;
+  $("deny-btn").disabled = false;
+  $("actions").classList.remove("hidden");
+  $("unpaired").classList.add("hidden");
+  $("approve-err").textContent = "";
+  $("approve-err").className = "";
   const res = await fetch("/a/" + rid, { headers: { Accept: "application/json" } });
   if (!res.ok) {
     showGone();
@@ -542,15 +626,20 @@ async function bootApprove(rid) {
     $("actions").classList.add("hidden");
     return;
   }
+  let iv = 0;
   const tick = () => {
     const left = Math.max(0, req.exp - Math.floor(Date.now() / 1000));
     $("countdown").textContent = left + "s left";
     if (left <= 0) {
+      if (iv) clearInterval(iv);
+      iv = 0;
       showGone();
+      return true;
     }
+    return false;
   };
-  tick();
-  const iv = setInterval(tick, 250);
+  if (tick()) return;
+  iv = setInterval(tick, 250);
 
   const decide = async (decision) => {
     $("approve-btn").disabled = true;
@@ -569,9 +658,9 @@ async function bootApprove(rid) {
         }),
       });
       if (!posted.ok) throw new Error(await posted.text());
-      clearInterval(iv);
-      $("result-text").textContent = decision === "allow" ? "Approved. The laptop can continue." : "Denied.";
-      show("result");
+      if (iv) clearInterval(iv);
+      iv = 0;
+      showDecision(decision);
     } catch (err) {
       banner($("approve-err"), "err", err.message || String(err));
       $("approve-btn").disabled = false;
@@ -586,11 +675,7 @@ boot();
 window.addEventListener("pageshow", (e) => {
   if (e.persisted) boot();
 });
-window.addEventListener("focus", () => {
-  if (isStandalone() && !notificationsGranted()) {
-    const open = document.querySelector("section:not(.hidden)");
-    if (open && (open.id === "home" || open.id === "a2hs" || open.id === "pair-done")) {
-      resumePaired();
-    }
-  }
+window.addEventListener("focus", maybeResumeIdle);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") maybeResumeIdle();
 });

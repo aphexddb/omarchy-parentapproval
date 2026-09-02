@@ -36,11 +36,21 @@ body {
 }
 h1 { font-size: 28px; letter-spacing: -0.03em; margin: 0 0 8px; }
 .lead { color: var(--muted); margin: 0 0 22px; line-height: 1.45; }
+.cmd-setup {
+  text-align: center;
+  user-select: all;
+  -webkit-user-select: all;
+  margin: 0 0 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
 .home-links {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: -6px 0 22px;
+  margin: 18px 0 0;
 }
 .home-link {
   display: inline-flex;

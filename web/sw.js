@@ -8,7 +8,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.mode === "navigate" || url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/app.js" || url.pathname === "/sw.js") {
+  if (event.request.mode === "navigate" || url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/app.js" || url.pathname === "/app.css" || url.pathname === "/sw.js") {
     event.respondWith(fetch(event.request, { cache: "no-store" }));
   }
 });
