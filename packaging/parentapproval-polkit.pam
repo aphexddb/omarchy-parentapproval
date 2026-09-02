@@ -1,0 +1,6 @@
+# parentapproval: kids skip password; non-kids skip this block.
+# Included from /etc/pam.d/polkit-1 only. No pam_exec stdout — that flag
+# forwards helper text into the authentication agent as PAM_TEXT_INFO and
+# would draw a parentapproval QR on a stock polkit prompt.
+auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup omarchy-kids
+auth [success=done default=die] pam_exec.so seteuid /usr/bin/parentapproval pam

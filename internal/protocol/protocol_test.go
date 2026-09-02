@@ -186,3 +186,16 @@ func TestSudoShellKey(t *testing.T) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
+
+func TestPolkitService(t *testing.T) {
+	for _, s := range []string{"polkit", "polkit-1", "POLKIT-1"} {
+		if !PolkitService(s) {
+			t.Errorf("%q should be a polkit service", s)
+		}
+	}
+	for _, s := range []string{"sudo", "login", ""} {
+		if PolkitService(s) {
+			t.Errorf("%q must not be treated as polkit", s)
+		}
+	}
+}

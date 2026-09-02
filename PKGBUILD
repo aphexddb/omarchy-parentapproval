@@ -13,7 +13,7 @@ optdepends=(
 )
 replaces=('omarchy-parentapproval')
 conflicts=('omarchy-parentapproval')
-backup=('etc/sudoers.d/omarchy-kids' 'etc/pam.d/parentapproval')
+backup=('etc/sudoers.d/omarchy-kids' 'etc/pam.d/parentapproval' 'etc/pam.d/parentapproval-polkit')
 install=packaging/parentapproval.install
 options=('!debug' '!emptydirs')
 # In-tree checkout: no release tarball. Directories cannot be listed in

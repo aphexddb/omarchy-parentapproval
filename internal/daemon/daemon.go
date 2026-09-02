@@ -74,8 +74,8 @@ type Daemon struct {
 	httpSrv  *http.Server
 	httpAddr string
 
-	sockLn   net.Listener
-	relay    *relayClient
+	sockLn      net.Listener
+	relay       *relayClient
 	watchers    []chan watchEvent
 	watchNonces map[string]int64
 }
@@ -1615,19 +1615,25 @@ func (d *Daemon) pendingMapLocked() map[string]any {
 			if url == "" {
 				url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
 			}
-			matrix, _ := qrdisp.Matrix(url)
-			return map[string]any{
+			out := map[string]any{
 				"kind":      "ask",
 				"rid":       r.RID,
-				"qr_url":    url,
 				"match":     r.Match,
 				"exp":       r.Exp.Unix(),
 				"user":      r.User,
 				"cmd":       r.Cmd,
 				"service":   r.Service,
 				"host_name": d.HostName(),
-				"matrix":    matrix,
 			}
+			if protocol.PolkitService(r.Service) {
+				// Laptop overlay / pending consumers must not paint a QR
+				// over a stock polkit prompt.
+				return out
+			}
+			matrix, _ := qrdisp.Matrix(url)
+			out["qr_url"] = url
+			out["matrix"] = matrix
+			return out
 		}
 	}
 	p := d.pairing

@@ -179,15 +179,26 @@ func SudoShellKey(displayed string) string {
 	return "sh -c " + StripLeadingSudo(displayed)
 }
 
+// PolkitService is an ad-hoc polkit PAM/helper service. Those prompts stay
+// stock: no parentapproval QR on the laptop.
+func PolkitService(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "polkit", "polkit-1":
+		return true
+	default:
+		return false
+	}
+}
+
 // Request is the JSON body for GET /a/{rid}.
 type Request struct {
-	V        int    `json:"v"`
-	RID      string `json:"rid"`
-	Nonce    string `json:"nonce"`
-	Exp      int64  `json:"exp"`
-	Match    string `json:"match"`
-	HostName string `json:"host_name"`
-	HostID   string `json:"host_id"`
+	V        int               `json:"v"`
+	RID      string            `json:"rid"`
+	Nonce    string            `json:"nonce"`
+	Exp      int64             `json:"exp"`
+	Match    string            `json:"match"`
+	HostName string            `json:"host_name"`
+	HostID   string            `json:"host_id"`
 	User     string            `json:"user"`
 	Service  string            `json:"service"`
 	CWD      string            `json:"cwd"`
