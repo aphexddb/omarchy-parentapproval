@@ -478,7 +478,7 @@ func presentAndWait(socket string, created map[string]any) error {
 		return err
 	}
 	fmt.Println(box)
-	presentDisplay(created)
+	overlayOK := presentDisplay(created)
 	defer dismissDisplay()
 
 	onInterrupt(func() {
@@ -494,14 +494,27 @@ func presentAndWait(socket string, created map[string]any) error {
 	switch result {
 	case "allow":
 		fmt.Println("Parent approved.")
+		showOverlayVerdict(created, result, overlayOK)
 		return nil
 	case "deny":
+		showOverlayVerdict(created, result, overlayOK)
 		return fmt.Errorf("parent denied")
 	case "cancel":
 		return fmt.Errorf("cancelled")
 	default:
 		return fmt.Errorf("timed out waiting for a parent")
 	}
+}
+
+const overlayVerdictHold = 2 * time.Second
+
+func showOverlayVerdict(created map[string]any, result string, overlayOK bool) {
+	if !overlayOK {
+		return
+	}
+	created["result"] = result
+	_ = summonOverlay(created)
+	time.Sleep(overlayVerdictHold)
 }
 
 func cmdStatus(args []string) error {
@@ -676,14 +689,18 @@ func overlayPayload(created map[string]any) (string, error) {
 	if kind == "" {
 		kind = "ask"
 	}
-	b, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"kind":   kind,
 		"cmd":    created["cmd"],
 		"user":   created["user"],
 		"match":  created["match"],
 		"url":    created["qr_url"],
 		"matrix": matrix,
-	})
+	}
+	if result, _ := created["result"].(string); result != "" {
+		payload["result"] = result
+	}
+	b, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}

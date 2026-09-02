@@ -47,12 +47,35 @@ func TestOverlayPayloadIncludesMatch(t *testing.T) {
 	if m["kind"] != "ask" {
 		t.Fatalf("kind=%v", m["kind"])
 	}
+	if _, ok := m["result"]; ok {
+		t.Fatalf("live payload should not include result: %+v", m)
+	}
 	if m["cmd"] != "ping" || m["user"] != "gardiner" {
 		t.Fatalf("payload %+v", m)
 	}
 	matrix, ok := m["matrix"].([]any)
 	if !ok || len(matrix) < 21 {
 		t.Fatalf("matrix %+v", m["matrix"])
+	}
+}
+
+func TestOverlayPayloadIncludesResult(t *testing.T) {
+	got, err := overlayPayload(map[string]any{
+		"cmd":    "ping",
+		"user":   "gardiner",
+		"match":  "515",
+		"qr_url": "https://parentapprovals.com/p/abc",
+		"result": "allow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["result"] != "allow" {
+		t.Fatalf("result=%v", m["result"])
 	}
 }
 
@@ -207,6 +230,10 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		"pair-abort",
 		"function confirmPair",
 		"text: \"Confirm\"",
+		"function playVerdict",
+		"id: verdictBadge",
+		"id: verdictAnim",
+		`root.verdict === "allow" ? "✓" : "✕"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Panel.qml missing %q", want)

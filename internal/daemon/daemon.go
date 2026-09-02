@@ -52,6 +52,10 @@ type Daemon struct {
 	requests map[string]*Request
 	byUser   map[string]string
 
+	// Last allow/deny so the overlay can flash a check or X after pending clears.
+	lastAskResult string
+	lastAskAt     time.Time
+
 	httpLn   net.Listener
 	httpSrv  *http.Server
 	httpAddr string
@@ -662,6 +666,8 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 	}
 
 	d.mu.Lock()
+	d.lastAskResult = ""
+	d.lastAskAt = time.Time{}
 	if oldID, ok := d.byUser[user]; ok {
 		if old, ok := d.requests[oldID]; ok && old.Result == "" {
 			old.Result = resultCancel
@@ -783,6 +789,9 @@ func (d *Daemon) Pending() (map[string]any, error) {
 	defer d.mu.Unlock()
 	if m := d.pendingMapLocked(); m != nil {
 		return m, nil
+	}
+	if (d.lastAskResult == resultAllow || d.lastAskResult == resultDeny) && time.Since(d.lastAskAt) < 3*time.Second {
+		return map[string]any{"rid": "", "kind": "ask", "result": d.lastAskResult}, nil
 	}
 	return map[string]any{"rid": ""}, nil
 }
@@ -1012,6 +1021,10 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 	}
 	r.Result = body.Decision
 	r.DeviceID = body.DeviceID
+	if body.Decision == resultAllow || body.Decision == resultDeny {
+		d.lastAskResult = body.Decision
+		d.lastAskAt = time.Now()
+	}
 	close(r.done)
 	if d.byUser[r.User] == rid {
 		delete(d.byUser, r.User)

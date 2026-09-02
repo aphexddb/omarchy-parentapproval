@@ -23,6 +23,8 @@ Item {
   property var qrRows: []
   property int qrSize: 0
   property string error: ""
+  property string verdict: ""
+  property real stageOpacity: 1
   readonly property bool pairing: root.kind === "pair"
 
   readonly property color onScrim: "white"
@@ -40,19 +42,24 @@ Item {
       root.qrRows = payload.matrix
       root.qrSize = payload.matrix.length
     }
+    if (payload.result === "allow" || payload.result === "deny")
+      root.playVerdict(String(payload.result))
   }
 
   function open(payloadJson) {
     applyPayload(payloadJson)
     root.opened = true
-    refresh()
-    poll.running = true
+    if (root.verdict === "") {
+      refresh()
+      poll.running = true
+    }
     Qt.callLater(function() {
       if (root.opened) keyCatcher.forceActiveFocus()
     })
   }
 
   function close() {
+    verdictAnim.stop()
     root.opened = false
     poll.running = false
     root.qrSize = 0
@@ -66,12 +73,25 @@ Item {
     root.pairName = ""
     root.pairBusy = false
     root.error = ""
+    root.verdict = ""
+    root.stageOpacity = 1
   }
 
   function dismiss() {
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "parentapproval")
     else close()
+  }
+
+  function playVerdict(result) {
+    if (root.verdict !== "") return
+    if (result !== "allow" && result !== "deny") {
+      root.dismiss()
+      return
+    }
+    root.verdict = result
+    poll.running = false
+    verdictAnim.restart()
   }
 
   function confirmPair() {
@@ -104,6 +124,17 @@ Item {
     onTriggered: root.refresh()
   }
 
+  SequentialAnimation {
+    id: verdictAnim
+    ParallelAnimation {
+      NumberAnimation { target: verdictBadge; property: "opacity"; from: 0; to: 1; duration: 180; easing.type: Easing.OutCubic }
+      NumberAnimation { target: verdictBadge; property: "scale"; from: 0.55; to: 1; duration: 280; easing.type: Easing.OutBack }
+    }
+    PauseAnimation { duration: 650 }
+    NumberAnimation { target: root; property: "stageOpacity"; to: 0; duration: 420; easing.type: Easing.InQuad }
+    ScriptAction { script: root.dismiss() }
+  }
+
   Process {
     id: pendingProc
     command: ["/usr/bin/parentapproval", "pending", "--json"]
@@ -114,6 +145,10 @@ Item {
         if (!text) return
         try {
           var data = JSON.parse(text)
+          if (data.result === "allow" || data.result === "deny") {
+            if (!root.pairing) root.playVerdict(data.result)
+            return
+          }
           if (data.kind === "pair" || data.sid) {
             root.kind = "pair"
             root.sid = data.sid || ""
@@ -126,11 +161,11 @@ Item {
             return
           }
           if (!data.rid) {
+            if (root.verdict !== "") return
             if (root.kind === "pair") {
               if (root.pairState === "pending_confirm") root.dismiss()
               return
             }
-            if (root.opened) root.dismiss()
             return
           }
           root.kind = "ask"
@@ -195,140 +230,171 @@ Item {
       }
     }
 
-    Rectangle {
+    Item {
+      id: stage
       anchors.fill: parent
-      color: Qt.rgba(0, 0, 0, 0.78)
-      MouseArea { anchors.fill: parent; onClicked: if (!root.pairing) root.dismiss() }
-    }
-
-    ColumnLayout {
-      anchors.centerIn: parent
-      spacing: Style.space(16)
-      width: Style.space(320)
-
-      Text {
-        text: root.pairing
-          ? (root.pairState === "pending_confirm" ? "SAME CODE?" : "SCAN TO PAIR")
-          : ((root.user || "Kid").toUpperCase() + " WANTS TO RUN")
-        color: root.onScrimDim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
-        font.letterSpacing: 2
-        Layout.alignment: Qt.AlignHCenter
-      }
-
-      Text {
-        text: root.pairing
-          ? (root.pairState === "pending_confirm"
-              ? ((root.pairName || "Phone") + " wants to parent this machine.")
-              : "Parent phone only — not the kid's.")
-          : root.cmd
-        color: root.onScrim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        wrapMode: Text.Wrap
-        horizontalAlignment: Text.AlignHCenter
-        Layout.fillWidth: true
-      }
+      opacity: root.stageOpacity
 
       Rectangle {
-        id: qrCanvas
-        visible: root.qrSize > 0
-        readonly property int moduleSize: root.qrSize > 0 ? Math.max(3, Math.floor(Style.space(240) / root.qrSize)) : 0
-        width: root.qrSize * moduleSize
-        height: width
-        color: "white"
-        radius: Style.cornerRadius
-        Layout.alignment: Qt.AlignHCenter
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.78)
+        MouseArea { anchors.fill: parent; onClicked: if (!root.pairing && root.verdict === "") root.dismiss() }
+      }
 
-        Grid {
-          anchors.fill: parent
-          columns: root.qrSize
-          Repeater {
-            model: root.qrSize * root.qrSize
+      ColumnLayout {
+        anchors.centerIn: parent
+        spacing: Style.space(16)
+        width: Style.space(320)
+
+        Text {
+          text: root.pairing
+            ? (root.pairState === "pending_confirm" ? "SAME CODE?" : "SCAN TO PAIR")
+            : ((root.user || "Kid").toUpperCase() + " WANTS TO RUN")
+          color: root.onScrimDim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+          font.letterSpacing: 2
+          Layout.alignment: Qt.AlignHCenter
+        }
+
+        Text {
+          text: root.pairing
+            ? (root.pairState === "pending_confirm"
+                ? ((root.pairName || "Phone") + " wants to parent this machine.")
+                : "Parent phone only — not the kid's.")
+            : root.cmd
+          color: root.onScrim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          horizontalAlignment: Text.AlignHCenter
+          Layout.fillWidth: true
+        }
+
+        Rectangle {
+          id: qrCanvas
+          visible: root.qrSize > 0
+          readonly property int moduleSize: root.qrSize > 0 ? Math.max(3, Math.floor(Style.space(240) / root.qrSize)) : 0
+          width: root.qrSize * moduleSize
+          height: width
+          color: "white"
+          radius: Style.cornerRadius
+          Layout.alignment: Qt.AlignHCenter
+
+          Grid {
+            anchors.fill: parent
+            columns: root.qrSize
+            Repeater {
+              model: root.qrSize * root.qrSize
+              Rectangle {
+                required property int index
+                readonly property int matrixRow: Math.floor(index / root.qrSize)
+                readonly property int matrixColumn: index % root.qrSize
+                width: qrCanvas.moduleSize
+                height: width
+                color: (root.qrRows[matrixRow] || "").charAt(matrixColumn) === "1" ? "#111111" : "transparent"
+              }
+            }
+          }
+
+          Item {
+            id: verdictBadge
+            anchors.centerIn: parent
+            width: parent.width * 0.44
+            height: width
+            visible: root.verdict !== ""
+            opacity: 0
+            scale: 0.55
+
             Rectangle {
-              required property int index
-              readonly property int matrixRow: Math.floor(index / root.qrSize)
-              readonly property int matrixColumn: index % root.qrSize
-              width: qrCanvas.moduleSize
-              height: width
-              color: (root.qrRows[matrixRow] || "").charAt(matrixColumn) === "1" ? "#111111" : "transparent"
+              anchors.fill: parent
+              radius: width / 2
+              color: root.verdict === "allow" ? "#3dd68c" : "#e24b4b"
+            }
+
+            Text {
+              anchors.centerIn: parent
+              text: root.verdict === "allow" ? "✓" : "✕"
+              color: root.verdict === "allow" ? "#062016" : "white"
+              font.family: root.fontFamily
+              font.pixelSize: verdictBadge.width * 0.58
+              font.bold: true
             }
           }
         }
-      }
 
-      Text {
-        text: (root.pairing ? "CODE  " : "MATCH  ") + (root.match || "•••")
-        color: "#f5c542"
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.title
-        font.bold: true
-        Layout.alignment: Qt.AlignHCenter
-      }
-
-      Text {
-        text: root.pairing
-          ? (root.pairState === "pending_confirm"
-              ? "If the phone shows this code, confirm. This is not a password."
-              : "The phone must show the same code. This is not a password.")
-          : "Approve on a paired parent phone. This is not a password."
-        color: root.onScrimDim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        wrapMode: Text.Wrap
-        horizontalAlignment: Text.AlignHCenter
-        Layout.fillWidth: true
-      }
-
-      RowLayout {
-        visible: root.pairing && root.pairState === "pending_confirm"
-        Layout.alignment: Qt.AlignHCenter
-        Layout.fillWidth: true
-        spacing: Style.space(12)
-
-        Rectangle {
-          Layout.fillWidth: true
-          height: Style.space(48)
-          radius: Style.cornerRadius
-          color: "transparent"
-          border.color: root.onScrimDim
-          border.width: 1
-          opacity: root.pairBusy ? 0.45 : 1
-          MouseArea {
-            anchors.fill: parent
-            enabled: !root.pairBusy
-            onClicked: root.abortPair()
-          }
-          Text {
-            anchors.centerIn: parent
-            text: "Abort"
-            color: root.onScrim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
+        Text {
+          text: (root.pairing ? "CODE  " : "MATCH  ") + (root.match || "•••")
+          color: "#f5c542"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+          Layout.alignment: Qt.AlignHCenter
         }
 
-        Rectangle {
+        Text {
+          text: root.pairing
+            ? (root.pairState === "pending_confirm"
+                ? "If the phone shows this code, confirm. This is not a password."
+                : "The phone must show the same code. This is not a password.")
+            : "Approve on a paired parent phone. This is not a password."
+          color: root.onScrimDim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.Wrap
+          horizontalAlignment: Text.AlignHCenter
           Layout.fillWidth: true
-          height: Style.space(48)
-          radius: Style.cornerRadius
-          color: "#3dd68c"
-          opacity: root.pairBusy ? 0.45 : 1
-          MouseArea {
-            anchors.fill: parent
-            enabled: !root.pairBusy
-            onClicked: root.confirmPair()
+        }
+
+        RowLayout {
+          visible: root.pairing && root.pairState === "pending_confirm"
+          Layout.alignment: Qt.AlignHCenter
+          Layout.fillWidth: true
+          spacing: Style.space(12)
+
+          Rectangle {
+            Layout.fillWidth: true
+            height: Style.space(48)
+            radius: Style.cornerRadius
+            color: "transparent"
+            border.color: root.onScrimDim
+            border.width: 1
+            opacity: root.pairBusy ? 0.45 : 1
+            MouseArea {
+              anchors.fill: parent
+              enabled: !root.pairBusy
+              onClicked: root.abortPair()
+            }
+            Text {
+              anchors.centerIn: parent
+              text: "Abort"
+              color: root.onScrim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
           }
-          Text {
-            anchors.centerIn: parent
-            text: "Confirm"
-            color: "#062016"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
+
+          Rectangle {
+            Layout.fillWidth: true
+            height: Style.space(48)
+            radius: Style.cornerRadius
+            color: "#3dd68c"
+            opacity: root.pairBusy ? 0.45 : 1
+            MouseArea {
+              anchors.fill: parent
+              enabled: !root.pairBusy
+              onClicked: root.confirmPair()
+            }
+            Text {
+              anchors.centerIn: parent
+              text: "Confirm"
+              color: "#062016"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
           }
         }
       }

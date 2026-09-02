@@ -348,6 +348,42 @@ func TestCreateRequiresParent(t *testing.T) {
 	}
 }
 
+func TestPendingShowsAskVerdict(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	enrollParent(t, d)
+	created, err := Create(sock, "milo", "sudo", "/", "true", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := Pending(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live["rid"] == "" || live["result"] != nil {
+		t.Fatalf("live pending %+v", live)
+	}
+	url, _ := created["qr_url"].(string)
+	raw, _ := json.Marshal(protocol.Decision{V: 1, DeviceID: "x", Decision: "deny"})
+	post, err := http.Post(url+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("deny %s", post.Status)
+	}
+	st, err := Pending(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["result"] != "deny" || st["kind"] != "ask" {
+		t.Fatalf("verdict pending %+v", st)
+	}
+	if rid, _ := st["rid"].(string); rid != "" {
+		t.Fatalf("decided request should not look live: %+v", st)
+	}
+}
+
 func TestListenSpec(t *testing.T) {
 	cases := []struct {
 		in, network, addr string

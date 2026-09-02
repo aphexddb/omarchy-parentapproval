@@ -2,26 +2,34 @@
 
 The kid wants Steam. You are in the kitchen. You should not have to walk over, take the keyboard, and type `sudo`.
 
-This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids accounts. Pair once. Add the page to your Home Screen. Allow notifications. Next time the kid hits sudo, your phone buzzes, shows the command and a match number, and you approve or deny. The kid never learns a sudo password, and **opening the request on an unpaired phone does nothing** — pairing is the security boundary.
+This is a parent-phone approval gate for [Omarchy](https://omarchy.org/) kids accounts. Pair once. Add the page to your Home Screen. Allow notifications. Next time a child account needs to ask for permissions to do something, your phone buzzes, shows the command, and you approve or deny. The child never learns a sudo password, and **opening the request on an unpaired phone does nothing**.
 
-Community extra for Omarchy. Not affiliated with Omarchy, Basecamp, or 37signals.
+A community extra for Omarchy.
 
 Agents: load [`default/agents/skills/parentapproval/SKILL.md`](default/agents/skills/parentapproval/SKILL.md) (or run `parentapproval install-skills`). The usual test is:
 
+first time setup
+```bash
+sudo parentapproval enable
+parentapproval pair               
+sudo parentapproval setup-kid milo
+```
+
+asking for approval
 ```bash
 parentapproval ask --cmd "pacman -S cowsay"
 ```
 
 ## How it works
 
-1. **You pair once**, sitting at the laptop. Scan the pairing URL (a QR is still printed). The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. Both screens show the same 6-digit code so a stranger cannot swap in their own key.
-2. **Add to Home Screen, tap Allow notifications.** After that the phone is a parent for this machine.
+1. **You pair once**, sitting at the laptop. Scan the pairing URL. The phone generates an Ed25519 key and keeps the private half. The laptop stores only the public half. Both screens show the same 6-digit code so a stranger cannot swap in their own key.    
+2. **Add the web page displayed to Home Screen, tap Allow notifications.** After that the phone is a parent for this machine.
 3. **The kid hits sudo** (or a polkit prompt). They are in the `omarchy-kids` group, so PAM does not accept their login password. The laptop asks the relay to notify paired phones.
 4. **Your phone buzzes.** Check the command and the match code, tap Approve. The phone signs the request the daemon already knows. One invocation, then it is spent. Replay is refuse.
 
-The QR / URL is a request, not a capability. TOTP is banned on purpose: a kid who photographs an enrollment QR would own sudo forever.
+Why this method vs TOTP? a kid who photographs an enrollment QR would own sudo forever.
 
-Phones talk only to the HTTPS origin (`https://parentapprovals.com` by default). The laptop daemon dials that origin outbound over WSS. No inbound firewall holes.
+No inbound firewall holes, phones talk only to the HTTPS origin over WSS.
 
 Wheel parents still type a password. The approval path is only for `omarchy-kids`.
 
