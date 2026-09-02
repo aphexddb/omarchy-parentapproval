@@ -1,7 +1,7 @@
 # Maintainer: parentapproval contributors
 pkgname=parentapproval
 pkgver=0.1.0
-pkgrel=34
+pkgrel=35
 pkgdesc="Parent-phone approval for Omarchy kids accounts"
 arch=('x86_64' 'aarch64')
 url="https://github.com/aphexddb/omarchy-parentapproval"
@@ -20,9 +20,10 @@ options=('!debug' '!emptydirs')
 source=()
 sha256sums=()
 
+# scripts/ is not installed, but check() greps scripts/dev-install.
 _src_files=(
   Makefile go.mod go.sum VERSION version.go LICENSE README.md AGENTS.md install.sh
-  cmd internal web packaging default overlay docs
+  cmd internal web packaging default overlay docs scripts
 )
 
 prepare() {
