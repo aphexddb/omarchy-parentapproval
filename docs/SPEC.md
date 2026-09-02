@@ -155,8 +155,9 @@ so kids `AUTH_SELF` instead of `auth_admin`. The session unit
 it shows the same parent-phone request as sudo, with the polkit command
 from `command_line` / `program` / the action message. After allow, the
 agent completes `polkit-agent-helper-1`; PAM redeems the one-shot grant
-so the parent is not asked twice. Wheel sessions leave the Omarchy
-password agent in place.
+so the parent is not asked twice. The grant is bound to the polkit
+action id and cookie; `RedeemService` must present both. Wheel sessions
+leave the Omarchy password agent in place.
 
 Kids (`omarchy-kids`) on `/etc/pam.d/sudo` and `/etc/pam.d/polkit-1`:
 

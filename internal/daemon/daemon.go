@@ -97,6 +97,8 @@ type oneShotGrant struct {
 	Inner   string
 	CWD     string
 	Service string
+	Action  string
+	Cookie  string
 	Exp     time.Time
 }
 
@@ -109,6 +111,8 @@ type Request struct {
 	Service string
 	CWD     string
 	Cmd     string
+	Action  string
+	Cookie  string
 	CmdHash []byte
 	QRURL   string
 
@@ -128,6 +132,8 @@ type sockReq struct {
 	Cmd      string `json:"cmd,omitempty"`
 	TTLS     int    `json:"ttl_s,omitempty"`
 	SAS      string `json:"sas,omitempty"`
+	Action   string `json:"action,omitempty"`
+	Cookie   string `json:"cookie,omitempty"`
 }
 
 func Open(cfg Config) (*Daemon, error) {
@@ -413,10 +419,10 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		d.PairAbort(req.SID)
 		return map[string]string{"result": "cancel"}, nil
 	case "create":
-		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS)
+		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS, req.Action, req.Cookie)
 	case "redeem":
 		if req.Service != "" && req.Cmd == "" {
-			return map[string]any{"ok": d.RedeemService(req.User, req.Service)}, nil
+			return map[string]any{"ok": d.RedeemService(req.User, req.Service, req.Action, req.Cookie)}, nil
 		}
 		return map[string]any{"ok": d.Redeem(req.User, req.Cmd)}, nil
 	case "exec":
@@ -747,7 +753,7 @@ func (d *Daemon) WaitPush(deviceID string) (map[string]any, error) {
 	return map[string]any{"ready": false, "device_id": deviceID}, nil
 }
 
-func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]any, error) {
+func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int, action, cookie string) (map[string]any, error) {
 	if user == "" {
 		return nil, errors.New("user required")
 	}
@@ -780,6 +786,8 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		Service: service,
 		CWD:     cwd,
 		Cmd:     cmd,
+		Action:  action,
+		Cookie:  cookie,
 		CmdHash: protocol.CmdHash(user, service, cwd, cmd),
 		done:    make(chan struct{}),
 	}
@@ -975,7 +983,7 @@ func (d *Daemon) Redeem(user, cmd string) bool {
 	return false
 }
 
-func (d *Daemon) RedeemService(user, service string) bool {
+func (d *Daemon) RedeemService(user, service, action, cookie string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	g := d.grant
@@ -984,6 +992,12 @@ func (d *Daemon) RedeemService(user, service string) bool {
 		return false
 	}
 	if user == "" || service == "" || g.User != user || g.Service != service {
+		return false
+	}
+	if g.Action != "" && g.Action != action {
+		return false
+	}
+	if g.Cookie != "" && g.Cookie != cookie {
 		return false
 	}
 	d.grant = nil
@@ -1346,6 +1360,8 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 			Inner:   protocol.StripLeadingSudo(r.Cmd),
 			CWD:     r.CWD,
 			Service: r.Service,
+			Action:  r.Action,
+			Cookie:  r.Cookie,
 			Exp:     time.Now().Add(45 * time.Second),
 		}
 	}
@@ -1645,7 +1661,11 @@ func WaitPush(socket, deviceID string) (map[string]any, error) {
 }
 
 func Create(socket, user, service, cwd, cmd string, ttl int) (map[string]any, error) {
-	return Call(socket, sockReq{Op: "create", User: user, Service: service, CWD: cwd, Cmd: cmd, TTLS: ttl})
+	return CreateAction(socket, user, service, cwd, cmd, ttl, "", "")
+}
+
+func CreateAction(socket, user, service, cwd, cmd string, ttl int, action, cookie string) (map[string]any, error) {
+	return Call(socket, sockReq{Op: "create", User: user, Service: service, CWD: cwd, Cmd: cmd, TTLS: ttl, Action: action, Cookie: cookie})
 }
 
 func Redeem(socket, user, cmd string) (bool, error) {
@@ -1658,7 +1678,11 @@ func Redeem(socket, user, cmd string) (bool, error) {
 }
 
 func RedeemService(socket, user, service string) (bool, error) {
-	st, err := Call(socket, sockReq{Op: "redeem", User: user, Service: service})
+	return RedeemServiceAction(socket, user, service, "", "")
+}
+
+func RedeemServiceAction(socket, user, service, action, cookie string) (bool, error) {
+	st, err := Call(socket, sockReq{Op: "redeem", User: user, Service: service, Action: action, Cookie: cookie})
 	if err != nil {
 		return false, err
 	}

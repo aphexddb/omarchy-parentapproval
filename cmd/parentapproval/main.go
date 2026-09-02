@@ -609,7 +609,8 @@ func cmdPam() error {
 	cmd := readCmdline(os.Getppid(), cwd)
 	polkit := service == "polkit-1" || service == "polkit"
 	if polkit {
-		if ok, err := daemon.RedeemService(p.socket, userName, "polkit"); err == nil && ok {
+		action, cookie := polkitRedeemIDs()
+		if ok, err := daemon.RedeemServiceAction(p.socket, userName, "polkit", action, cookie); err == nil && ok {
 			return nil
 		}
 	}

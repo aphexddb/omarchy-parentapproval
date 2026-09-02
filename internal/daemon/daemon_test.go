@@ -572,6 +572,68 @@ func TestRedeemPolkitServiceAfterAllow(t *testing.T) {
 	}
 }
 
+func TestRedeemPolkitRequiresActionAndCookie(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	created, err := CreateAction(sock, "milo", "polkit", "/", "/usr/bin/true", 30, "org.freedesktop.policykit.exec", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, _ := created["qr_url"].(string)
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body protocol.Request
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		res.Body.Close()
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
+	sig := protocol.Sign(priv, canon)
+	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
+	raw, _ := json.Marshal(dec)
+	post, err := http.Post(url+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("allow %s", post.Status)
+	}
+	ok, err := RedeemService(sock, "milo", "polkit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("action-bound grant must not redeem without action/cookie")
+	}
+	ok, err = RedeemServiceAction(sock, "milo", "polkit", "org.freedesktop.packagekit.package-install", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("wrong action must not redeem")
+	}
+	ok, err = RedeemServiceAction(sock, "milo", "polkit", "org.freedesktop.policykit.exec", "cookie-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("wrong cookie must not redeem")
+	}
+	ok, err = RedeemServiceAction(sock, "milo", "polkit", "org.freedesktop.policykit.exec", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("matching action and cookie should redeem")
+	}
+}
+
 func TestExecGrantRunsApprovedCommand(t *testing.T) {
 	d, sock := startTestDaemon(t)
 	priv, deviceID := enrollParent(t, d)
