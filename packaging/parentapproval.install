@@ -8,33 +8,42 @@ migrate_legacy_state() {
   rm -rf /usr/share/omarchy-parentapproval /usr/share/doc/omarchy-parentapproval /usr/share/licenses/omarchy-parentapproval
 }
 
+_systemd_live() {
+  [ -d /run/systemd/system ]
+}
+
 post_install() {
-  systemd-sysusers --replace=/usr/lib/sysusers.d/parentapproval.conf >/dev/null 2>&1 || true
+  systemd-sysusers /usr/lib/sysusers.d/parentapproval.conf >/dev/null 2>&1 || true
   migrate_legacy_state
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl reset-failed parentapprovald.service >/dev/null 2>&1 || true
-  systemctl enable --now parentapprovald.service >/dev/null 2>&1 || true
+  if _systemd_live; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed parentapprovald.service >/dev/null 2>&1 || true
+    systemctl enable --now parentapprovald.service >/dev/null 2>&1 || true
+  fi
   echo "Parent Approval is installed. Daemon should be running."
   echo "As the parent:"
   echo "  sudo parentapproval enable"
-  echo "  parentapproval pair"
+  echo "  sudo parentapproval pair"
   echo "  sudo parentapproval setup-kid <kid-username>"
-  echo "  parentapproval install-skills"
+  echo "  sudo parentapproval install-skills"
   echo "Test without a kid account:"
   echo "  parentapproval ask --cmd \"pacman -S cowsay\""
-  echo "Rebuild with makepkg -f -si so pacman does not reuse a stale tarball."
 }
 
 post_upgrade() {
-  systemd-sysusers --replace=/usr/lib/sysusers.d/parentapproval.conf >/dev/null 2>&1 || true
+  systemd-sysusers /usr/lib/sysusers.d/parentapproval.conf >/dev/null 2>&1 || true
   migrate_legacy_state
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl enable parentapprovald.service >/dev/null 2>&1 || true
-  systemctl reset-failed parentapprovald.service >/dev/null 2>&1 || true
-  systemctl restart parentapprovald.service >/dev/null 2>&1 || true
+  if _systemd_live; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable parentapprovald.service >/dev/null 2>&1 || true
+    systemctl reset-failed parentapprovald.service >/dev/null 2>&1 || true
+    systemctl restart parentapprovald.service >/dev/null 2>&1 || true
+  fi
 }
 
 pre_remove() {
-  systemctl disable --now parentapprovald.service >/dev/null 2>&1 || true
-  systemctl disable --now omarchy-parentapprovald.service >/dev/null 2>&1 || true
+  if _systemd_live; then
+    systemctl disable --now parentapprovald.service >/dev/null 2>&1 || true
+    systemctl disable --now omarchy-parentapprovald.service >/dev/null 2>&1 || true
+  fi
 }
