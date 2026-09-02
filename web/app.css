@@ -214,6 +214,19 @@ input, select {
 .warn { background: #2a1a12; color: #ffd0b0; }
 .ok { background: #10261c; color: var(--approve); }
 .err { background: #2a1418; color: var(--deny); }
+.host-list {
+  list-style: none;
+  margin: 0 0 22px;
+  padding: 0;
+}
+.host-list li {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 0 0 8px;
+  font-weight: 700;
+}
 .hidden { display: none; }
 .countdown { color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
 .coach ol {
