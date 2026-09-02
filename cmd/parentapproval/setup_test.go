@@ -70,10 +70,84 @@ func TestShippedPAMInclude(t *testing.T) {
 		"pam_exec.so",
 		"parentapproval pam",
 		"omarchy-kids",
+		"seteuid stdout",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("parentapproval.pam missing %q", want)
 		}
+	}
+}
+
+func pamExecModuleLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		if strings.Contains(line, "pam_exec.so") {
+			return line
+		}
+	}
+	return ""
+}
+
+func TestShippedPolkitPAMHasNoStdout(t *testing.T) {
+	raw, err := os.ReadFile("../../packaging/parentapproval-polkit.pam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		"pam_succeed_if.so",
+		"pam_exec.so",
+		"parentapproval pam",
+		"omarchy-kids",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("parentapproval-polkit.pam missing %q", want)
+		}
+	}
+	execLine := pamExecModuleLine(s)
+	if execLine == "" {
+		t.Fatal("parentapproval-polkit.pam missing pam_exec line")
+	}
+	if strings.Contains(execLine, "stdout") {
+		t.Fatalf("polkit pam_exec must not pass stdout: %s", execLine)
+	}
+}
+
+func TestPAMPolkitAuthLinesOmitStdout(t *testing.T) {
+	execLine := pamExecModuleLine(pamPolkitAuthLines())
+	if execLine == "" {
+		t.Fatal("polkit include missing pam_exec")
+	}
+	if strings.Contains(execLine, "stdout") {
+		t.Fatalf("polkit include must not use pam_exec stdout:\n%s", execLine)
+	}
+	if !strings.Contains(pamExecModuleLine(pamAuthLines()), "seteuid stdout") {
+		t.Fatal("sudo include still needs stdout so the TTY QR works")
+	}
+}
+
+func TestPAMIncludeForPolkit(t *testing.T) {
+	got := pamIncludeFor("/etc/pam.d/polkit-1")
+	if !strings.Contains(got, "auth include parentapproval-polkit") {
+		t.Fatalf("polkit-1 include:\n%s", got)
+	}
+	sudo := pamIncludeFor("/etc/pam.d/sudo")
+	if strings.Contains(sudo, "parentapproval-polkit") {
+		t.Fatal("sudo must keep the stdout include")
+	}
+	if !strings.Contains(sudo, "auth include parentapproval\n") && !strings.Contains(sudo, "auth include parentapproval") {
+		t.Fatalf("sudo include:\n%s", sudo)
+	}
+}
+
+func TestStripPAMRemovesPolkitInclude(t *testing.T) {
+	in := pamPolkitLines() + "auth      required pam_unix.so\n"
+	got := stripPAM(in)
+	if strings.Contains(got, "parentapproval") {
+		t.Fatalf("strip left polkit include:\n%s", got)
 	}
 }
 
