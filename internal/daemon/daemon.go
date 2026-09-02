@@ -36,6 +36,15 @@ const (
 	resultCancel  = "cancel"
 )
 
+// watchHold is how long GET /v1/watch waits for an ask before returning idle.
+var watchHold = 25 * time.Second
+
+type watchEvent struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+	RID  string `json:"rid,omitempty"`
+}
+
 type Config struct {
 	StateDir   string
 	SocketPath string
@@ -65,8 +74,9 @@ type Daemon struct {
 	httpSrv  *http.Server
 	httpAddr string
 
-	sockLn net.Listener
-	relay  *relayClient
+	sockLn   net.Listener
+	relay    *relayClient
+	watchers []chan watchEvent
 }
 
 type pairSession struct {
@@ -428,6 +438,9 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 		if err := d.store.Revoke(req.SID); err != nil {
 			return nil, err
 		}
+		if d.relay != nil {
+			d.relay.RevokeParent(req.SID)
+		}
 		return map[string]bool{"ok": true}, nil
 	default:
 		return nil, fmt.Errorf("unknown op %q", req.Op)
@@ -617,6 +630,9 @@ func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
 		return nil, err
 	}
 	d.consumePendingPushReady(parent.DeviceID)
+	if d.relay != nil {
+		d.relay.PublishParent(parent.DeviceID, parent.PubKey)
+	}
 	done := &protocol.PairDone{
 		OK:       true,
 		HostID:   d.HostID(),
@@ -813,6 +829,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 	d.writePendingLocked()
 	d.mu.Unlock()
 
+	d.fanoutWatch(watchEvent{Kind: "ask", URL: url, RID: r.RID})
 	if d.relay != nil && via == "relay" {
 		title := "Parent Approval"
 		body := fmt.Sprintf("%s wants to run %s", r.User, r.Cmd)
@@ -1082,6 +1099,9 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 		}
 		d.writeWeb(w, "index.html")
 		return
+	case path == "/v1/watch" && req.Method == http.MethodGet:
+		d.handleWatch(w, req)
+		return
 	case path == "/" || path == "/index.html":
 		d.writeWeb(w, "index.html")
 		return
@@ -1094,6 +1114,106 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		http.NotFound(w, req)
+	}
+}
+
+func (d *Daemon) handleWatch(w http.ResponseWriter, req *http.Request) {
+	q := req.URL.Query()
+	if q.Get("host_id") == "" || q.Get("device_id") == "" || q.Get("sig") == "" || q.Get("exp") == "" {
+		http.Error(w, `{"error":"host_id, device_id, exp, sig required"}`, http.StatusBadRequest)
+		return
+	}
+	if !d.verifyWatchAuth(req) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	ch := make(chan watchEvent, 1)
+	d.mu.Lock()
+	d.watchers = append(d.watchers, ch)
+	if ev := d.liveAskEventLocked(); ev != nil {
+		d.mu.Unlock()
+		d.removeWatcher(ch)
+		writeJSON(w, ev)
+		return
+	}
+	d.mu.Unlock()
+	defer d.removeWatcher(ch)
+
+	timer := time.NewTimer(watchHold)
+	defer timer.Stop()
+	select {
+	case ev := <-ch:
+		writeJSON(w, ev)
+	case <-req.Context().Done():
+		return
+	case <-timer.C:
+		writeJSON(w, watchEvent{Kind: "idle"})
+	}
+}
+
+func (d *Daemon) verifyWatchAuth(req *http.Request) bool {
+	q := req.URL.Query()
+	hostID := strings.TrimSpace(q.Get("host_id"))
+	deviceID := strings.TrimSpace(q.Get("device_id"))
+	sigB64 := strings.TrimSpace(q.Get("sig"))
+	exp, err := strconv.ParseInt(strings.TrimSpace(q.Get("exp")), 10, 64)
+	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" {
+		return false
+	}
+	if hostID != d.HostID() || !protocol.WatchAuthFresh(exp, time.Now().Unix()) {
+		return false
+	}
+	parent, ok := d.store.GetParent(deviceID)
+	if !ok {
+		return false
+	}
+	pub, err := protocol.DecodeB64(parent.PubKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	sig, err := protocol.DecodeB64(sigB64)
+	if err != nil {
+		return false
+	}
+	return protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, exp), sig)
+}
+
+func (d *Daemon) liveAskEventLocked() *watchEvent {
+	now := time.Now()
+	for _, r := range d.requests {
+		if r == nil || r.Result != "" || now.After(r.Exp) {
+			continue
+		}
+		url := r.QRURL
+		if url == "" {
+			url = fmt.Sprintf("%s/a/%s", d.BaseURL(), r.RID)
+		}
+		return &watchEvent{Kind: "ask", URL: url, RID: r.RID}
+	}
+	return nil
+}
+
+func (d *Daemon) fanoutWatch(ev watchEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, ch := range d.watchers {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+func (d *Daemon) removeWatcher(ch chan watchEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, x := range d.watchers {
+		if x == ch {
+			d.watchers = append(d.watchers[:i], d.watchers[i+1:]...)
+			return
+		}
 	}
 }
 

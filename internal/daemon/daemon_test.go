@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1029,5 +1031,157 @@ func TestWaitPushAnySubForHost(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatal("wait-push timed out")
+	}
+}
+
+func waitHTTP(t *testing.T, d *Daemon) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d.mu.Lock()
+		addr := d.httpAddr
+		d.mu.Unlock()
+		if addr != "" {
+			return d.BaseURL()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("http not ready")
+	return ""
+}
+
+func signedWatchURL(base, hostID, deviceID string, priv ed25519.PrivateKey) string {
+	exp := time.Now().Add(time.Minute).Unix()
+	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, exp))
+	q := url.Values{}
+	q.Set("host_id", hostID)
+	q.Set("device_id", deviceID)
+	q.Set("exp", strconv.FormatInt(exp, 10))
+	q.Set("sig", protocol.B64(sig))
+	return base + "/v1/watch?" + q.Encode()
+}
+
+func TestWatchRequiresAuth(t *testing.T) {
+	d, _ := startTestDaemon(t)
+	base := waitHTTP(t, d)
+	res, err := http.Get(base + "/v1/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %s", res.Status)
+	}
+	bare, err := http.Get(base + "/v1/watch?host_id=" + d.HostID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bare.Body.Close()
+	if bare.StatusCode != http.StatusBadRequest {
+		t.Fatalf("host_id-only %s", bare.Status)
+	}
+}
+
+func TestWatchRejectsForeignKey(t *testing.T) {
+	d, _ := startTestDaemon(t)
+	enrollParent(t, d)
+	_, stranger, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := waitHTTP(t, d)
+	res, err := http.Get(signedWatchURL(base, d.HostID(), "parent-test-device", stranger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status %s", res.Status)
+	}
+}
+
+func TestWatchReturnsLiveAskImmediately(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	created, err := Create(sock, "milo", "sudo", "/", "true", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, _ := created["rid"].(string)
+	base := waitHTTP(t, d)
+	res, err := http.Get(signedWatchURL(base, d.HostID(), deviceID, priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("watch %s %s", res.Status, b)
+	}
+	var ev watchEvent
+	if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "ask" || ev.RID != rid {
+		t.Fatalf("event %+v want rid %s", ev, rid)
+	}
+	if ev.URL == "" || !strings.Contains(ev.URL, "/a/"+rid) {
+		t.Fatalf("url %s", ev.URL)
+	}
+}
+
+func TestWatchUnblocksWhenAskCreated(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	base := waitHTTP(t, d)
+
+	done := make(chan watchEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := http.Get(signedWatchURL(base, d.HostID(), deviceID, priv))
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer res.Body.Close()
+		var ev watchEvent
+		if err := json.NewDecoder(res.Body).Decode(&ev); err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	created, err := Create(sock, "milo", "sudo", "/", "pacman -S cowsay", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, _ := created["rid"].(string)
+
+	select {
+	case ev := <-done:
+		if ev.Kind != "ask" || ev.RID != rid {
+			t.Fatalf("event %+v want %s", ev, rid)
+		}
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not unblock when ask was created")
+	}
+}
+
+func TestWatchIdleWrongHost(t *testing.T) {
+	d, _ := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	base := waitHTTP(t, d)
+
+	res, err := http.Get(signedWatchURL(base, "not-this-host", deviceID, priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status %s", res.Status)
 	}
 }
