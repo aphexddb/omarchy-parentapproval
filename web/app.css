@@ -102,6 +102,7 @@ h1 { font-size: 28px; letter-spacing: -0.03em; margin: 0 0 8px; }
 .home-link--github {
   width: 2.9em;
   height: 2.9em;
+  font-size: 13px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 0.4em;
