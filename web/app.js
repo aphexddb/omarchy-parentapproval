@@ -445,15 +445,21 @@ async function enableNotifications(hostId, deviceId, msgEl) {
 function showNotifySetup(recs) {
   const rec = recs && recs[0];
   show("notify-setup");
+  const unpairBtn = $("notify-setup-unpair-btn");
   if (rec) {
-    $("notify-setup-host").textContent = rec.host_name || "this laptop";
+    renderHostList($("notify-setup-hosts"), recs);
     $("notify-setup-paired").classList.remove("hidden");
     $("notify-setup-lead").textContent =
       "iPhone will not buzz until you tap Allow in this Home Screen app. Safari pairing does not copy over.";
+    if (unpairBtn) {
+      unpairBtn.classList.remove("hidden");
+      unpairBtn.onclick = () => showUnpairConfirm(recs);
+    }
   } else {
     $("notify-setup-paired").classList.add("hidden");
     $("notify-setup-lead").textContent =
       "iPhone Home Screen apps have their own storage. Pairing in Safari does not count. Tap Allow, then scan a pairing QR from this app.";
+    if (unpairBtn) unpairBtn.classList.add("hidden");
   }
   wireNotifyButton($("notify-setup-btn"), rec && rec.host_id, rec && rec.device_id, $("notify-setup-msg"));
 }

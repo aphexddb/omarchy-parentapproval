@@ -94,6 +94,8 @@ func TestPWAPromptsNotifications(t *testing.T) {
 		`id="unpair-confirm"`,
 		`id="unpair-confirm-btn"`,
 		`id="unpair-cancel-btn"`,
+		`id="notify-setup-hosts"`,
+		`id="notify-setup-unpair-btn"`,
 		`sudo parentapproval pair`,
 		`Get started`,
 		`curl -fsSL https://parentapprovals.com/install | bash`,

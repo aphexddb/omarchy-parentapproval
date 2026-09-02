@@ -96,9 +96,15 @@
       <div class="eyebrow">Parent Approval</div>
       <h1>Allow notifications</h1>
       <p class="lead" id="notify-setup-lead">iPhone will not buzz until you tap Allow in this Home Screen app.</p>
-      <div id="notify-setup-paired" class="banner ok hidden">Parent on <strong id="notify-setup-host">this laptop</strong>.</div>
+      <div id="notify-setup-paired" class="hidden">
+        <p class="meta">Paired with</p>
+        <ul id="notify-setup-hosts" class="host-list"></ul>
+      </div>
       <div class="row"><button class="primary" id="notify-setup-btn" type="button">Allow notifications</button></div>
       <div id="notify-setup-msg"></div>
+      <div class="row">
+        <button class="deny hidden" id="notify-setup-unpair-btn" type="button">Unpair</button>
+      </div>
     </section>
 
     <section id="a2hs" class="hidden">
@@ -161,6 +167,6 @@
   </main>
   <script src="/nacl.min.js" integrity="sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/"></script>
   <script src="/sha256.min.js" integrity="sha384-2hE+62EhDTI8GB1l6/KBZldM8qsy8CUJ/e5YlZaSbD6Bi4z0YhdrH2LCjDqYXAkg"></script>
-  <script src="/app.js?v=41"></script>
+  <script src="/app.js?v=42"></script>
 </body>
 </html>
