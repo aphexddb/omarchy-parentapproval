@@ -10,3 +10,14 @@ the CLI.
 ```bash
 parentapproval ask --cmd "pacman -S cowsay"
 ```
+
+## Release
+
+Bump the same version in `VERSION`, `PKGBUILD` (`pkgver`; reset `pkgrel` to 1), and `cmd/parentapproval/main.go` (`var version`). Commit, then tag and push — GoReleaser publishes Linux amd64 and arm64 binaries only.
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+Dry-run (no GitHub upload): `make release-snapshot`.
