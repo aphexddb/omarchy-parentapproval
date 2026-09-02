@@ -13,7 +13,7 @@ optdepends=(
 )
 replaces=('omarchy-parentapproval')
 conflicts=('omarchy-parentapproval')
-backup=('etc/sudoers.d/omarchy-kids' 'etc/pam.d/parentapproval')
+backup=('etc/sudoers.d/omarchy-kids' 'etc/pam.d/parentapproval' 'etc/pam.d/parentapproval-polkit')
 install=packaging/parentapproval.install
 options=('!debug' '!emptydirs')
 # In-tree checkout: no release tarball. Directories cannot be listed in
@@ -25,7 +25,7 @@ sha256sums=()
 
 _src_files=(
   Makefile go.mod go.sum VERSION version.go LICENSE README.md AGENTS.md install.sh
-  cmd internal web packaging default overlay
+  cmd internal web packaging default overlay docs
 )
 
 prepare() {

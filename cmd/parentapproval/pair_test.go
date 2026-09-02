@@ -31,15 +31,37 @@ func TestPairWaitsForPhoneConfirmAndPush(t *testing.T) {
 	}
 	for _, want := range []string{
 		"offered a key",
-		"Read the 6 digits off",
-		"A bare Y will not confirm",
+		"Confirm on the phone",
 		"type the 6-digit code from the phone",
+		"Waiting for a phone",
 		"Waiting for notifications",
 		"waitForPush",
 		"Notifications on",
+		"hasQRFlag",
+		"watchDisplayClose",
+		"pairing aborted",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("pair flow missing %q", want)
 		}
+	}
+	if !strings.Contains(s, "if consoleQR") {
+		t.Error("pair must only print a terminal QR when -qr is set")
+	}
+	pendingIdx := strings.Index(s, `case "pending_confirm"`)
+	if pendingIdx < 0 {
+		t.Fatal("pair missing pending_confirm")
+	}
+	if !strings.Contains(s[pendingIdx:], "dismissDisplay()") {
+		t.Error("pair must dismiss the QR overlay as soon as a phone offers a key")
+	}
+}
+
+func TestHasQRFlag(t *testing.T) {
+	if !hasQRFlag([]string{"--dev", "-qr"}) || !hasQRFlag([]string{"--qr"}) {
+		t.Fatal("expected -qr/--qr")
+	}
+	if hasQRFlag([]string{"--dev"}) || hasQRFlag([]string{"--qr-code"}) {
+		t.Fatal("false positive")
 	}
 }
