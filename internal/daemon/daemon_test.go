@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -53,6 +55,56 @@ func startTestDaemon(t *testing.T) (*Daemon, string) {
 	return nil, ""
 }
 
+func callerUser(t *testing.T) string {
+	t.Helper()
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Username
+}
+
+func getAsk(t *testing.T, askURL string, priv ed25519.PrivateKey, deviceID string) protocol.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, askURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("GET ask %s %s", res.Status, b)
+	}
+	var body protocol.Request
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.User != "" || body.Cmd != "" || body.CWD != "" || body.HostName != "" {
+		t.Fatalf("ask leaked plaintext to the wire: %+v", body)
+	}
+	if deviceID == "" || priv == nil {
+		return body
+	}
+	blob, ok := body.Sealed[deviceID]
+	if !ok {
+		t.Fatalf("missing sealed blob for %s: %#v", deviceID, body.Sealed)
+	}
+	fields, err := protocol.OpenAsk(blob, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.User = fields.User
+	body.CWD = fields.CWD
+	body.Cmd = fields.Cmd
+	body.HostName = fields.HostName
+	return body
+}
+
 func enrollParent(t *testing.T, d *Daemon) (ed25519.PrivateKey, string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -84,26 +136,8 @@ func TestApproveAndReplay(t *testing.T) {
 		t.Fatalf("bad create: %#v", created)
 	}
 
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Accept", "application/json")
-	res, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		t.Fatalf("GET %s", res.Status)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if body.User != "milo" || body.Cmd != "pacman -S steam" {
+	body := getAsk(t, url, priv, deviceID)
+	if body.User != callerUser(t) || body.Cmd != "pacman -S steam" {
 		t.Fatalf("request %+v", body)
 	}
 	hash := protocol.B64(protocol.CmdHash(body.User, body.Service, body.CWD, body.Cmd))
@@ -144,22 +178,14 @@ func TestApproveAndReplay(t *testing.T) {
 
 func TestUnpairedCannotAllow(t *testing.T) {
 	d, sock := startTestDaemon(t)
-	enrollParent(t, d)
+	priv, deviceID := enrollParent(t, d)
 	created, err := Create(sock, "maya", "sudo", "/", "true", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
 	_, stranger, _ := ed25519.GenerateKey(nil)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	var body protocol.Request
-	_ = json.NewDecoder(res.Body).Decode(&body)
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(stranger, canon)
 	dec := protocol.Decision{V: 1, DeviceID: "stranger", Decision: "allow", Signature: protocol.B64(sig)}
@@ -182,15 +208,7 @@ func TestCommandSwapRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	var body protocol.Request
-	_ = json.NewDecoder(res.Body).Decode(&body)
+	body := getAsk(t, url, priv, deviceID)
 	evil := protocol.B64(protocol.CmdHash(body.User, body.Service, body.CWD, "visudo"))
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, evil)
 	sig := protocol.Sign(priv, canon)
@@ -229,19 +247,9 @@ func TestOneOutstandingPerUser(t *testing.T) {
 	}
 }
 
-func TestPairConfirm(t *testing.T) {
-	d, sock := startTestDaemon(t)
-	started, err := PairStart(sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sid := started["sid"].(string)
-	url := started["qr_url"].(string)
-	pub, _, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer := protocol.PairOffer{V: 1, DeviceID: "phone-1", Name: "Mom Pixel", Alg: "Ed25519", PubKey: protocol.B64(pub)}
+func offerPair(t *testing.T, url, deviceID, name string, pub ed25519.PublicKey) string {
+	t.Helper()
+	offer := protocol.PairOffer{V: 1, DeviceID: deviceID, Name: name, Alg: "Ed25519", PubKey: protocol.B64(pub)}
 	raw, _ := json.Marshal(offer)
 	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
 	if err != nil {
@@ -252,12 +260,48 @@ func TestPairConfirm(t *testing.T) {
 		b, _ := io.ReadAll(post.Body)
 		t.Fatalf("offer %s %s", post.Status, b)
 	}
+	var body map[string]any
+	if err := json.NewDecoder(post.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	sas, _ := body["sas"].(string)
+	if sas == "" {
+		t.Fatal("offer returned empty SAS")
+	}
+	return sas
+}
+
+func TestPairConfirm(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	url := started["qr_url"].(string)
+	if sas, _ := started["sas"].(string); sas != "" {
+		t.Fatalf("SAS must not exist before an offer: %q", sas)
+	}
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sas := offerPair(t, url, "phone-1", "Mom Pixel", pub)
+	if sas != protocol.PairSAS(sid, protocol.B64(pub)) {
+		t.Fatalf("sas %q want %q", sas, protocol.PairSAS(sid, protocol.B64(pub)))
+	}
 	st, err := PairStatus(sock, sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st["state"] != "pending_confirm" {
 		t.Fatalf("state %+v", st)
+	}
+	if st["name"] != "Mom Pixel" {
+		t.Fatalf("name %+v", st)
+	}
+	if st["sas"] != sas {
+		t.Fatalf("status sas %v want %s", st["sas"], sas)
 	}
 	pend, err := Pending(sock)
 	if err != nil {
@@ -266,7 +310,16 @@ func TestPairConfirm(t *testing.T) {
 	if pend["kind"] != "pair" || pend["state"] != "pending_confirm" {
 		t.Fatalf("pending after offer %+v", pend)
 	}
-	if _, err := PairConfirm(sock, sid); err != nil {
+	if pend["name"] != "Mom Pixel" || pend["match"] != sas {
+		t.Fatalf("pending %+v", pend)
+	}
+	if _, err := PairConfirm(sock, sid, ""); err == nil {
+		t.Fatal("confirm without SAS should fail")
+	}
+	if _, err := PairConfirm(sock, sid, "000000"); err == nil {
+		t.Fatal("confirm with wrong SAS should fail")
+	}
+	if _, err := PairConfirm(sock, sid, sas); err != nil {
 		t.Fatal(err)
 	}
 	if d.Store().ParentCount() != 1 {
@@ -286,17 +339,8 @@ func TestPairConfirmFromPhone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer := protocol.PairOffer{V: 1, DeviceID: "phone-2", Name: "Dad iPhone", Alg: "Ed25519", PubKey: protocol.B64(pub)}
-	raw, _ := json.Marshal(offer)
-	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	post.Body.Close()
-	if post.StatusCode != http.StatusAccepted {
-		t.Fatalf("offer %s", post.Status)
-	}
-	body, _ := json.Marshal(map[string]string{"device_id": "phone-2"})
+	sas := offerPair(t, url, "phone-2", "Dad iPhone", pub)
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-2", "sas": sas})
 	conf, err := http.Post(url+"/confirm", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +362,46 @@ func TestPairConfirmFromPhone(t *testing.T) {
 	}
 }
 
+func TestSecondPairOfferRejected(t *testing.T) {
+	_, sock := startTestDaemon(t)
+	started, err := PairStart(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := started["sid"].(string)
+	url := started["qr_url"].(string)
+	pub1, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sas1 := offerPair(t, url, "phone-1", "Mom Pixel", pub1)
+	offer := protocol.PairOffer{V: 1, DeviceID: "phone-kid", Name: "Kid Phone", Alg: "Ed25519", PubKey: protocol.B64(pub2)}
+	raw, _ := json.Marshal(offer)
+	post, err := http.Post(url, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer post.Body.Close()
+	if post.StatusCode != http.StatusConflict {
+		b, _ := io.ReadAll(post.Body)
+		t.Fatalf("second offer %s %s", post.Status, b)
+	}
+	st, err := PairStatus(sock, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["name"] != "Mom Pixel" || st["sas"] != sas1 {
+		t.Fatalf("pending key was swapped: %+v", st)
+	}
+	if sas1 == protocol.PairSAS(sid, protocol.B64(pub2)) {
+		t.Fatal("kid key produced the same SAS as the parent key")
+	}
+}
+
 func TestPendingDuringPair(t *testing.T) {
 	_, sock := startTestDaemon(t)
 	started, err := PairStart(sock)
@@ -331,8 +415,8 @@ func TestPendingDuringPair(t *testing.T) {
 	if st["kind"] != "pair" {
 		t.Fatalf("pending %+v", st)
 	}
-	if st["match"] != started["sas"] {
-		t.Fatalf("match %v want %v", st["match"], started["sas"])
+	if st["match"] != "" {
+		t.Fatalf("SAS must be empty before an offer, got %v", st["match"])
 	}
 	if st["sid"] != started["sid"] {
 		t.Fatalf("sid %v", st["sid"])
@@ -347,6 +431,54 @@ func TestCreateRequiresParent(t *testing.T) {
 	_, sock := startTestDaemon(t)
 	if _, err := Create(sock, "milo", "sudo", "/", "true", 30); err == nil {
 		t.Fatal("create without parents should fail")
+	}
+}
+
+func TestCreateUserFromPeercred(t *testing.T) {
+	if _, err := createUser("spoof", 0, false); err == nil {
+		t.Fatal("create without peercred must fail")
+	}
+	got, err := createUser("root-may-set", 0, true)
+	if err != nil || got != "root-may-set" {
+		t.Fatalf("root override got %q %v", got, err)
+	}
+	uid := uint32(os.Getuid())
+	if uid == 0 {
+		t.Skip("running as root")
+	}
+	got, err = createUser("definitely-not-me", uid, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != callerUser(t) {
+		t.Fatalf("got %q want peer %q", got, callerUser(t))
+	}
+}
+
+func TestCreateIgnoresSpoofedUserAndPendingIsPrivate(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	enrollParent(t, d)
+	created, err := Create(sock, "definitely-not-me", "sudo", "/", "true", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created["user"] != callerUser(t) {
+		t.Fatalf("create user %+v", created["user"])
+	}
+	path := filepath.Join(d.cfg.StateDir, "pending.json")
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("pending.json mode %04o", st.Mode().Perm())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "definitely-not-me") {
+		t.Fatalf("pending used spoofed user: %s", raw)
 	}
 }
 
@@ -404,7 +536,7 @@ func TestRedeemAfterAllow(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("deny %s", post.Status)
 	}
-	ok, err := Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	ok, err := Redeem(sock, callerUser(t), protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,18 +549,7 @@ func TestRedeemAfterAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ = created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -442,14 +563,14 @@ func TestRedeemAfterAllow(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("allow %s %s", post.Status, b)
 	}
-	ok, err = Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	ok, err = Redeem(sock, callerUser(t), protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
 		t.Fatal("allow should mint a one-shot sudo grant")
 	}
-	ok, err = Redeem(sock, "milo", protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
+	ok, err = Redeem(sock, callerUser(t), protocol.SudoShellKey("sudo echo 'LLLOOLLL'"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,18 +587,7 @@ func TestRedeemPolkitServiceAfterAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -490,19 +600,70 @@ func TestRedeemPolkitServiceAfterAllow(t *testing.T) {
 	if post.StatusCode != 200 {
 		t.Fatalf("allow %s", post.Status)
 	}
-	ok, err := RedeemService(sock, "milo", "polkit")
+	ok, err := RedeemService(sock, callerUser(t), "polkit")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
 		t.Fatal("polkit helper PAM should redeem the parent-approved grant even if cmdline is the helper")
 	}
-	ok, err = RedeemService(sock, "milo", "polkit")
+	ok, err = RedeemService(sock, callerUser(t), "polkit")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok {
 		t.Fatal("polkit grant must be single-use")
+	}
+}
+
+func TestRedeemPolkitRequiresActionAndCookie(t *testing.T) {
+	d, sock := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	created, err := CreateAction(sock, "milo", "polkit", "/", "/usr/bin/true", 30, "org.freedesktop.policykit.exec", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, _ := created["qr_url"].(string)
+	body := getAsk(t, url, priv, deviceID)
+	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
+	sig := protocol.Sign(priv, canon)
+	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
+	raw, _ := json.Marshal(dec)
+	post, err := http.Post(url+"/decision", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != 200 {
+		t.Fatalf("allow %s", post.Status)
+	}
+	ok, err := RedeemService(sock, callerUser(t), "polkit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("action-bound grant must not redeem without action/cookie")
+	}
+	ok, err = RedeemServiceAction(sock, callerUser(t), "polkit", "org.freedesktop.packagekit.package-install", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("wrong action must not redeem")
+	}
+	ok, err = RedeemServiceAction(sock, callerUser(t), "polkit", "org.freedesktop.policykit.exec", "cookie-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("wrong cookie must not redeem")
+	}
+	ok, err = RedeemServiceAction(sock, callerUser(t), "polkit", "org.freedesktop.policykit.exec", "cookie-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("matching action and cookie should redeem")
 	}
 }
 
@@ -514,18 +675,7 @@ func TestExecGrantRunsApprovedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	url, _ := created["qr_url"].(string)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		res.Body.Close()
-		t.Fatal(err)
-	}
-	res.Body.Close()
+	body := getAsk(t, url, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -539,7 +689,7 @@ func TestExecGrantRunsApprovedCommand(t *testing.T) {
 		t.Fatalf("allow %s", post.Status)
 	}
 
-	st, err := Exec(sock, "milo", "sudo echo LLLOOLLL")
+	st, err := Exec(sock, callerUser(t), "sudo echo LLLOOLLL")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,10 +701,10 @@ func TestExecGrantRunsApprovedCommand(t *testing.T) {
 		t.Fatalf("exit %+v", st["exit"])
 	}
 
-	if _, err := Exec(sock, "milo", "sudo echo LLLOOLLL"); err == nil {
+	if _, err := Exec(sock, callerUser(t), "sudo echo LLLOOLLL"); err == nil {
 		t.Fatal("exec grant must be single-use")
 	}
-	if _, err := Exec(sock, "milo", "rm -rf /"); err == nil {
+	if _, err := Exec(sock, callerUser(t), "rm -rf /"); err == nil {
 		t.Fatal("unapproved command must not run")
 	}
 }
@@ -769,7 +919,15 @@ func TestRelayPairAndAsk(t *testing.T) {
 	if st["state"] != "pending_confirm" {
 		t.Fatalf("state %+v", st)
 	}
-	if _, err := PairConfirm(sock, sid); err != nil {
+	var offered map[string]any
+	if err := json.NewDecoder(post.Body).Decode(&offered); err != nil {
+		t.Fatal(err)
+	}
+	sas, _ := offered["sas"].(string)
+	if sas != protocol.PairSAS(sid, protocol.B64(pub)) {
+		t.Fatalf("relay sas %q", sas)
+	}
+	if _, err := PairConfirm(sock, sid, sas); err != nil {
 		t.Fatal(err)
 	}
 
@@ -786,21 +944,7 @@ func TestRelayPairAndAsk(t *testing.T) {
 	if !strings.Contains(askURL, "/p/") {
 		t.Fatalf("ask url %s", askURL)
 	}
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/a/"+rid, nil)
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		b, _ := io.ReadAll(res.Body)
-		t.Fatalf("GET ask %s %s", res.Status, b)
-	}
-	var body protocol.Request
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
+	body := getAsk(t, ts.URL+"/a/"+rid, priv, deviceID)
 	canon := protocol.Canonical("allow", body.RID, body.Nonce, body.Exp, body.HostID, body.User, body.Service, body.CmdHash)
 	sig := protocol.Sign(priv, canon)
 	dec := protocol.Decision{V: 1, DeviceID: deviceID, Decision: "allow", Signature: protocol.B64(sig)}
@@ -872,17 +1016,8 @@ func TestWaitPushAfterSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer := protocol.PairOffer{V: 1, DeviceID: "phone-push", Name: "Mom Pixel", Alg: "Ed25519", PubKey: protocol.B64(pub)}
-	raw, _ := json.Marshal(offer)
-	post, err := http.Post(ts.URL+"/pair/"+sid, "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	post.Body.Close()
-	if post.StatusCode != http.StatusAccepted {
-		t.Fatalf("offer %s", post.Status)
-	}
-	body, _ := json.Marshal(map[string]string{"device_id": "phone-push"})
+	sas := offerPair(t, ts.URL+"/pair/"+sid, "phone-push", "Mom Pixel", pub)
+	body, _ := json.Marshal(map[string]string{"device_id": "phone-push", "sas": sas})
 	conf, err := http.Post(ts.URL+"/pair/"+sid+"/confirm", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -1051,11 +1186,20 @@ func waitHTTP(t *testing.T, d *Daemon) string {
 }
 
 func signedWatchURL(base, hostID, deviceID string, priv ed25519.PrivateKey) string {
+	nonce := make([]byte, protocol.WatchNonceMin)
+	if _, err := rand.Read(nonce); err != nil {
+		panic(err)
+	}
+	return signedWatchURLNonce(base, hostID, deviceID, priv, protocol.B64(nonce))
+}
+
+func signedWatchURLNonce(base, hostID, deviceID string, priv ed25519.PrivateKey, nonce string) string {
 	exp := time.Now().Add(time.Minute).Unix()
-	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, exp))
+	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, nonce, exp))
 	q := url.Values{}
 	q.Set("host_id", hostID)
 	q.Set("device_id", deviceID)
+	q.Set("nonce", nonce)
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("sig", protocol.B64(sig))
 	return base + "/v1/watch?" + q.Encode()
@@ -1183,5 +1327,63 @@ func TestWatchIdleWrongHost(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status %s", res.Status)
+	}
+}
+
+func TestTakeUnbiasedDigits(t *testing.T) {
+	got := string(takeUnbiasedDigits([]byte{249, 250, 255, 0, 9}, 3))
+	if got != "909" {
+		t.Fatalf("got %q want 909", got)
+	}
+	if s := takeUnbiasedDigits([]byte{255, 254, 253, 252, 251, 250}, 3); len(s) != 0 {
+		t.Fatalf("biased bytes produced %q", s)
+	}
+	if s := takeUnbiasedDigits([]byte{0, 1, 2, 3}, 2); string(s) != "01" {
+		t.Fatalf("got %q", s)
+	}
+	if takeUnbiasedDigits(nil, 3) != nil && len(takeUnbiasedDigits(nil, 3)) != 0 {
+		t.Fatal("empty src")
+	}
+}
+
+func TestRandomDigitsUniformAlphabet(t *testing.T) {
+	s := randomDigits(3)
+	if len(s) != 3 {
+		t.Fatalf("len %d: %q", len(s), s)
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			t.Fatalf("non-digit %q in %q", r, s)
+		}
+	}
+	s = randomDigits(6)
+	if len(s) != 6 {
+		t.Fatalf("len %d: %q", len(s), s)
+	}
+}
+
+func TestWatchRejectsReplay(t *testing.T) {
+	old := watchHold
+	watchHold = 20 * time.Millisecond
+	defer func() { watchHold = old }()
+	d, _ := startTestDaemon(t)
+	priv, deviceID := enrollParent(t, d)
+	base := waitHTTP(t, d)
+	u := signedWatchURL(base, d.HostID(), deviceID, priv)
+	res, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("first watch %s", res.Status)
+	}
+	res2, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replay status %s", res2.Status)
 	}
 }

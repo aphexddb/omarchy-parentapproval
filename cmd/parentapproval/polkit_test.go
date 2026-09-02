@@ -6,6 +6,24 @@ import (
 	"testing"
 )
 
+func TestPolkitRedeemIDsFromEnvAndTicket(t *testing.T) {
+	t.Setenv("PARENTAPPROVAL_POLKIT_ACTION", "org.freedesktop.policykit.exec")
+	t.Setenv("PARENTAPPROVAL_POLKIT_COOKIE", "ck-env")
+	action, cookie := polkitRedeemIDs()
+	if action != "org.freedesktop.policykit.exec" || cookie != "ck-env" {
+		t.Fatalf("env %q %q", action, cookie)
+	}
+
+	t.Setenv("PARENTAPPROVAL_POLKIT_ACTION", "")
+	t.Setenv("PARENTAPPROVAL_POLKIT_COOKIE", "")
+	polkitTicketDir = t.TempDir()
+	writePolkitTicket(os.Getuid(), "org.freedesktop.udisks2.filesystem-mount", "ck-file")
+	action, cookie = polkitRedeemIDs()
+	if action != "org.freedesktop.udisks2.filesystem-mount" || cookie != "ck-file" {
+		t.Fatalf("ticket %q %q", action, cookie)
+	}
+}
+
 func TestPolkitCommandFromDetails(t *testing.T) {
 	got := polkitCommand("org.freedesktop.policykit.exec", "Authentication is required to run /usr/bin/true", map[string]string{
 		"program":      "/usr/bin/true",

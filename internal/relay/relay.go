@@ -150,7 +150,8 @@ type Server struct {
 	expectPush map[string]string             // host_id -> device_id (empty = any)
 	asks       map[string]*liveAsk           // host_id -> latest open ask
 	parents    map[string]map[string]string  // host_id -> device_id -> pubkey
-	watchers   []*watchWaiter
+	watchers    []*watchWaiter
+	watchNonces map[string]int64
 }
 
 var upgrader = websocket.Upgrader{
@@ -175,7 +176,8 @@ func New(cfg Config) (*Server, error) {
 		subs:       map[string]map[string]pushSub{},
 		expectPush: map[string]string{},
 		asks:       map[string]*liveAsk{},
-		parents:    map[string]map[string]string{},
+		parents:     map[string]map[string]string{},
+		watchNonces: map[string]int64{},
 	}
 	if err := s.loadVAPID(); err != nil {
 		return nil, err
@@ -688,8 +690,8 @@ func (s *Server) askRID(hostID string) string {
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	hostID, ok := s.verifyWatchAuth(r)
 	if !ok {
-		if r.URL.Query().Get("host_id") == "" || r.URL.Query().Get("device_id") == "" || r.URL.Query().Get("sig") == "" || r.URL.Query().Get("exp") == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id, device_id, exp, sig required"})
+		if r.URL.Query().Get("host_id") == "" || r.URL.Query().Get("device_id") == "" || r.URL.Query().Get("sig") == "" || r.URL.Query().Get("exp") == "" || r.URL.Query().Get("nonce") == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host_id, device_id, nonce, exp, sig required"})
 			return
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -723,9 +725,10 @@ func (s *Server) verifyWatchAuth(r *http.Request) (string, bool) {
 	q := r.URL.Query()
 	hostID := strings.TrimSpace(q.Get("host_id"))
 	deviceID := strings.TrimSpace(q.Get("device_id"))
+	nonce := strings.TrimSpace(q.Get("nonce"))
 	sigB64 := strings.TrimSpace(q.Get("sig"))
 	exp, err := strconv.ParseInt(strings.TrimSpace(q.Get("exp")), 10, 64)
-	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" {
+	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" || !protocol.ValidWatchNonce(nonce) {
 		return "", false
 	}
 	if !protocol.WatchAuthFresh(exp, time.Now().Unix()) {
@@ -745,7 +748,13 @@ func (s *Server) verifyWatchAuth(r *http.Request) (string, bool) {
 	if err != nil || len(pub) != ed25519.PublicKeySize {
 		return "", false
 	}
-	if !protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, exp), sig) {
+	if !protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, nonce, exp), sig) {
+		return "", false
+	}
+	s.mu.Lock()
+	ok := protocol.ConsumeWatchNonce(s.watchNonces, deviceID, nonce, exp, time.Now().Unix())
+	s.mu.Unlock()
+	if !ok {
 		return "", false
 	}
 	return hostID, true

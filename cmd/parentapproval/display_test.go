@@ -277,6 +277,9 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		"pair-confirm",
 		"pair-abort",
 		"function confirmPair",
+		"typedSas",
+		"Type the 6-digit code from the phone",
+		"A Y keystroke will not confirm",
 		"text: \"Confirm\"",
 		"function playVerdict",
 		"id: verdictBadge",
@@ -286,5 +289,8 @@ func TestOverlayPanelAppliesPayload(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("Panel.qml missing %q", want)
 		}
+	}
+	if strings.Contains(s, "Qt.Key_Y") {
+		t.Error("overlay must not confirm pairing with a bare Y keypress")
 	}
 }

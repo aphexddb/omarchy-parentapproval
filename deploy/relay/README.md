@@ -5,6 +5,12 @@ in the Go container.
 
 Default public URL: `https://parentapprovals.com`
 
+This origin is the parent phone's **code trust root**. It serves `app.js` and
+the signing libraries, and IndexedDB on that origin holds the private key.
+Self-host if you do not want `parentapprovals.com` in that position. The
+laptop already supports `OMARCHY_PARENTAPPROVAL_RELAY`. See
+[`docs/trust-model.md`](../../docs/trust-model.md).
+
 ## Railway
 
 Project config is Infrastructure as Code in [`.railway/railway.ts`](../../.railway/railway.ts)

@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -542,11 +543,16 @@ func enrollWatchParent(t *testing.T, conn *websocket.Conn, deviceID string, pub 
 }
 
 func signedWatchURL(base, hostID, deviceID string, priv ed25519.PrivateKey) string {
+	nonce := make([]byte, protocol.WatchNonceMin)
+	if _, err := rand.Read(nonce); err != nil {
+		panic(err)
+	}
 	exp := time.Now().Add(time.Minute).Unix()
-	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, exp))
+	sig := protocol.Sign(priv, protocol.CanonicalWatch(hostID, deviceID, protocol.B64(nonce), exp))
 	q := url.Values{}
 	q.Set("host_id", hostID)
 	q.Set("device_id", deviceID)
+	q.Set("nonce", protocol.B64(nonce))
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("sig", protocol.B64(sig))
 	return base + "/v1/watch?" + q.Encode()

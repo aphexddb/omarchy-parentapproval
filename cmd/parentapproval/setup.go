@@ -15,6 +15,8 @@ import (
 
 const (
 	pamMarker       = "parentapproval pam"
+	pamIncludeName  = "parentapproval"
+	pamIncludePath  = "/etc/pam.d/parentapproval"
 	sudoersKid      = "/etc/sudoers.d/omarchy-kids"
 	unitName        = "parentapprovald.service"
 	legacyUnitName  = "omarchy-parentapprovald.service"
@@ -51,6 +53,9 @@ func applyHooks() error {
 	if err := writeSudoers(); err != nil {
 		return err
 	}
+	if err := writePAMInclude(); err != nil {
+		return err
+	}
 	if err := patchPAM("/etc/pam.d/sudo"); err != nil {
 		return err
 	}
@@ -70,6 +75,7 @@ func applyHooks() error {
 func removeHooks() {
 	_ = unpatchPAM("/etc/pam.d/sudo")
 	_ = unpatchPAM("/etc/pam.d/polkit-1")
+	_ = os.Remove(pamIncludePath)
 	_ = exec.Command("systemctl", "--global", "disable", polkitUserUnit).Run()
 	unlinkInstalledSkills()
 }
@@ -144,12 +150,12 @@ func cmdDoctor(args []string) error {
 	}
 	if raw, err := os.ReadFile("/etc/pam.d/sudo"); err == nil {
 		text := string(raw)
-		hasPAM := strings.Contains(text, pamMarker)
-		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — reinstall the parentapproval package")
-		fprint := strings.Index(text, "pam_fprintd.so")
-		ours := strings.Index(text, pamMarker)
-		if fprint >= 0 && ours >= 0 {
-			check(ours < fprint, "parent approve is above fingerprint", "fingerprint is above parent approve — kids with an enrolled print could sudo. Reinstall the parentapproval package.")
+		hasPAM := pamHookInstalled(text)
+		check(hasPAM, "PAM sudo hook installed", "PAM sudo hook missing — reinstall the parentapproval package or run sudo parentapproval apply-hooks")
+		if mods := pamSufficientAbove(text); len(mods) > 0 {
+			check(false, "", "auth sufficient ("+strings.Join(mods, ", ")+") is above parent approve — a kid who enrolls that factor can sudo without a parent. Re-run: sudo parentapproval apply-hooks")
+		} else if hasPAM {
+			check(true, "parent approve is above fingerprint/FIDO sufficient lines", "")
 		}
 	}
 	if _, err := os.Stat(sudoersKid); err == nil {
@@ -208,6 +214,10 @@ Defaults:%` + protocol.KidsGroup + ` timestamp_timeout=0
 	return os.Rename(tmp, sudoersKid)
 }
 
+func writePAMInclude() error {
+	return os.WriteFile(pamIncludePath, []byte(pamAuthLines()), 0o644)
+}
+
 func patchPAM(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -217,11 +227,8 @@ func patchPAM(path string) error {
 		}
 		return err
 	}
-	text := string(raw)
-	if strings.Contains(text, pamMarker) {
-		// Keep our lines first so fingerprint/FIDO cannot bypass kids.
-		text = stripPAM(text)
-	}
+	// Re-hoist so a later `1i auth sufficient pam_u2f.so` / fprintd prepend does not win.
+	text := stripPAM(string(raw))
 	return os.WriteFile(path, []byte(pamLines()+text), 0o644)
 }
 
@@ -233,7 +240,7 @@ func unpatchPAM(path string) error {
 	return os.WriteFile(path, []byte(stripPAM(string(raw))), 0o644)
 }
 
-func pamLines() string {
+func pamAuthLines() string {
 	exe := "/usr/bin/parentapproval"
 	if p, err := os.Executable(); err == nil {
 		if abs, err := filepath.Abs(p); err == nil {
@@ -246,6 +253,39 @@ func pamLines() string {
 		"auth [success=done default=die] pam_exec.so seteuid stdout " + exe + " pam\n"
 }
 
+func pamLines() string {
+	return "# parentapproval: kids skip password; non-kids skip this block.\n" +
+		"auth include " + pamIncludeName + "\n"
+}
+
+func pamHookInstalled(text string) bool {
+	return strings.Contains(text, "auth include "+pamIncludeName) || strings.Contains(text, pamMarker)
+}
+
+// pamSufficientAbove returns auth sufficient modules that appear before the
+// parentapproval block. Those lines can satisfy sudo without phoning a parent.
+func pamSufficientAbove(text string) []string {
+	var mods []string
+	for _, line := range strings.Split(text, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		if strings.Contains(line, "auth include "+pamIncludeName) || strings.Contains(line, pamMarker) ||
+			(strings.Contains(line, "pam_exec.so") && strings.Contains(line, "parentapproval")) {
+			return mods
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "auth" {
+			continue
+		}
+		if fields[1] == "sufficient" {
+			mods = append(mods, fields[2])
+		}
+	}
+	return mods
+}
+
 func stripPAM(text string) string {
 	var keep []string
 	skipNext := false
@@ -255,7 +295,12 @@ func stripPAM(text string) string {
 			continue
 		}
 		if strings.Contains(line, "parentapproval: kids skip password") {
-			skipNext = true
+			if !strings.Contains(line, "auth include") {
+				skipNext = true
+			}
+			continue
+		}
+		if strings.Contains(line, "auth include "+pamIncludeName) {
 			continue
 		}
 		if strings.Contains(line, pamMarker) || (strings.Contains(line, "pam_exec.so") && strings.Contains(line, "parentapproval")) {

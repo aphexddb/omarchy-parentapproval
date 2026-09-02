@@ -72,7 +72,7 @@ daemon (`~/.local/state` + a per-user socket).
 ## Setup (parent wheel account)
 
 ```bash
-sudo parentapproval pair          # scan, confirm the 6-digit code on the phone, allow notifications
+sudo parentapproval pair          # scan; compare the key-bound 6-digit code; confirm on the phone or type those digits on the overlay
 sudo parentapproval setup-kid milo
 sudo parentapproval install-skills
 ```
@@ -106,14 +106,17 @@ is set.
    `setup-kid`, or `sudo -u milo sudo pacman -S cowsay` from a kid session.
 2. No paired phone: `parentapproval status` then `sudo parentapproval pair`.
 3. Daemon down: `sudo parentapproval doctor` and `sudo systemctl start parentapprovald`.
-4. Relay disconnected: `status` should show the relay URL as connected. Check WAN.
-5. Keys paired in `--dev` but kid sudo uses the systemd daemon — re-pair with
+4. Fingerprint or FIDO was enabled after parentapproval: Omarchy's setup scripts prepend `auth sufficient` above our block. Re-run `sudo parentapproval apply-hooks`, then `doctor`.
+5. Relay disconnected: `status` should show the relay URL as connected. Check WAN.
+6. Keys paired in `--dev` but kid sudo uses the systemd daemon — re-pair with
    `sudo parentapproval pair` (no `--dev`).
 
 ## Relay
 
 Default HTTPS origin: **https://parentapprovals.com**. The laptop dials it
-outbound over WSS. The phone never talks to the laptop. Self-hosters set
+outbound over WSS. The phone never talks to the laptop. That origin also
+serves the PWA that holds the parent key — it is the phone's code trust
+root. High-assurance use should self-host. Self-hosters set
 `OMARCHY_PARENTAPPROVAL_RELAY` on the laptop and `RELAY_PUBLIC_URL` on the
 relay. `--relay=off` is local-only.
 

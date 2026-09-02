@@ -30,6 +30,64 @@ function cmdHash(user, service, cwd, cmd) {
   return b64url(digest);
 }
 
+// Ed25519 seed → X25519 secret (clamped SHA-512). Matches Go protocol.Ed25519SeedToX25519.
+function ed25519SeedToX25519(sk) {
+  const seed = sk.length >= 32 ? sk.subarray(0, 32) : sk;
+  const h = nacl.hash(seed);
+  h[0] &= 248;
+  h[31] &= 127;
+  h[31] |= 64;
+  return h.subarray(0, 32);
+}
+
+// Open a daemon SealAsk blob: ephemeral_pub (32) || nonce (24) || nacl.box ciphertext.
+function openSealed(blobB64, sk) {
+  const raw = b64urlToBytes(blobB64);
+  if (raw.length < 32 + 24 + 16) throw new Error("bad sealed ask");
+  const eph = raw.subarray(0, 32);
+  const nonce = raw.subarray(32, 56);
+  const ct = raw.subarray(56);
+  const plain = nacl.box.open(ct, nonce, eph, ed25519SeedToX25519(sk));
+  if (!plain) throw new Error("could not decrypt ask");
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+function revealAsk(req, rec) {
+  if (req.sealed && rec && rec.device_id && rec.secret && req.sealed[rec.device_id]) {
+    const fields = openSealed(req.sealed[rec.device_id], b64urlToBytes(rec.secret));
+    req.user = fields.user;
+    req.cwd = fields.cwd;
+    req.cmd = fields.cmd;
+    req.host_name = fields.host_name || req.host_name;
+    return;
+  }
+  if (!req.cmd || !req.user) {
+    throw new Error("This ask has no command we can decrypt. Re-pair or update the laptop.");
+  }
+}
+
+// PairSAS matches Go protocol.PairSAS: SHA-256 of OMARCHY-SAS/1\n<sid>\n<pubkey>\n
+// mapped to 6 decimal digits with rejection sampling (bytes 250–255 skipped).
+function pairSAS(sid, pubkeyB64) {
+  const seed = Uint8Array.from(sha256.array(enc.encode(`OMARCHY-SAS/1\n${sid}\n${pubkeyB64}\n`)));
+  let block = seed;
+  const out = [];
+  let counter = 0;
+  while (out.length < 6) {
+    for (const b of block) {
+      if (b >= 250) continue;
+      out.push(String(b % 10));
+      if (out.length === 6) return out.join("");
+    }
+    counter += 1;
+    const next = new Uint8Array(seed.length + 1);
+    next.set(seed);
+    next[seed.length] = counter & 0xff;
+    block = Uint8Array.from(sha256.array(next));
+  }
+  return out.join("");
+}
+
 function canonical(decision, req, hash) {
   return enc.encode(
     `OMARCHY-APPROVE/1\n${decision}\n${req.rid}\n${req.nonce}\n${req.exp}\n${req.host_id}\n${req.user}\n${req.service}\n${hash}\n`
@@ -600,7 +658,7 @@ async function offerPair(sid, deviceId, name, pubkeyB64) {
   return res.json();
 }
 
-async function waitForPair(sid, deviceId) {
+async function waitForPair(sid, deviceId, localSas) {
   const confirmBtn = $("pair-confirm-btn");
   const abortBtn = $("pair-abort-btn");
   const errEl = $("pair-wait-err");
@@ -613,7 +671,7 @@ async function waitForPair(sid, deviceId) {
         const res = await fetch("/pair/" + sid + "/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ device_id: deviceId }),
+          body: JSON.stringify({ device_id: deviceId, sas: localSas }),
         });
         if (!res.ok) throw new Error(await res.text());
       } catch (err) {
@@ -665,10 +723,15 @@ async function bootPair(sid) {
   if (existing && existing.secret) {
     try {
       const kp = nacl.sign.keyPair.fromSecretKey(b64urlToBytes(existing.secret));
-      const offered = await offerPair(sid, existing.device_id, deviceNameGuess(), b64url(kp.publicKey));
-      $("sas").textContent = (offered.sas || "").split("").join(" ");
+      const pubB64 = b64url(kp.publicKey);
+      const offered = await offerPair(sid, existing.device_id, deviceNameGuess(), pubB64);
+      const localSas = pairSAS(sid, pubB64);
+      if (offered.sas && offered.sas !== localSas) {
+        throw new Error("pairing code mismatch — abort and start a new pair");
+      }
+      $("sas").textContent = localSas.split("").join(" ");
       show("pair-wait");
-      const done = await waitForPair(sid, existing.device_id);
+      const done = await waitForPair(sid, existing.device_id, localSas);
       existing.host_id = done.host_id;
       existing.host_name = done.host_name;
       existing.device_id = done.device_id;
@@ -687,10 +750,15 @@ async function bootPair(sid) {
       const secretB64 = b64url(pairKey.secretKey);
       const deviceId = newDeviceId();
       const name = $("device-name").value.trim() || deviceNameGuess();
-      const offered = await offerPair(sid, deviceId, name, b64url(rawPub));
-      $("sas").textContent = (offered.sas || "").split("").join(" ");
+      const pubB64 = b64url(rawPub);
+      const offered = await offerPair(sid, deviceId, name, pubB64);
+      const localSas = pairSAS(sid, pubB64);
+      if (offered.sas && offered.sas !== localSas) {
+        throw new Error("pairing code mismatch — abort and start a new pair");
+      }
+      $("sas").textContent = localSas.split("").join(" ");
       show("pair-wait");
-      const done = await waitForPair(sid, deviceId);
+      const done = await waitForPair(sid, deviceId, localSas);
       const rec = {
         host_id: done.host_id,
         host_name: done.host_name,
@@ -728,18 +796,27 @@ function sleep(ms, signal) {
   });
 }
 
-function canonicalWatch(hostId, deviceId, exp) {
-  return enc.encode(`OMARCHY-WATCH/1\n${hostId}\n${deviceId}\n${exp}\n`);
+function watchNonce() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return b64url(b);
+}
+
+function canonicalWatch(hostId, deviceId, nonce, exp) {
+  return enc.encode(`OMARCHY-WATCH/1\n${hostId}\n${deviceId}\n${nonce}\n${exp}\n`);
 }
 
 function watchQuery(rec) {
   const exp = Math.floor(Date.now() / 1000) + 60;
-  const sig = b64url(signCanonical(b64urlToBytes(rec.secret), canonicalWatch(rec.host_id, rec.device_id, exp)));
+  const nonce = watchNonce();
+  const sig = b64url(signCanonical(b64urlToBytes(rec.secret), canonicalWatch(rec.host_id, rec.device_id, nonce, exp)));
   return (
     "host_id=" +
     encodeURIComponent(rec.host_id) +
     "&device_id=" +
     encodeURIComponent(rec.device_id) +
+    "&nonce=" +
+    encodeURIComponent(nonce) +
     "&exp=" +
     exp +
     "&sig=" +
@@ -872,6 +949,23 @@ async function bootApprove(rid) {
     return;
   }
   const req = await res.json();
+  const rec = await loadRecord(req.host_id);
+  if (!rec) {
+    $("host").textContent = req.host_name || "unknown host";
+    $("unpaired").classList.remove("hidden");
+    $("approve-btn").disabled = true;
+    $("actions").classList.add("hidden");
+    return;
+  }
+  try {
+    revealAsk(req, rec);
+  } catch (e) {
+    banner($("approve-err"), "err", e.message || String(e));
+    $("approve-btn").disabled = true;
+    $("deny-btn").disabled = true;
+    $("host").textContent = req.host_name || "";
+    return;
+  }
   $("host").textContent = req.host_name;
   $("who").textContent = req.user + " · " + req.service;
   $("cmd").textContent = req.cmd;
@@ -881,13 +975,6 @@ async function bootApprove(rid) {
     banner($("approve-err"), "err", "Request was tampered with in transit. Do not approve.");
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
-    return;
-  }
-  const rec = await loadRecord(req.host_id);
-  if (!rec) {
-    $("unpaired").classList.remove("hidden");
-    $("approve-btn").disabled = true;
-    $("actions").classList.add("hidden");
     return;
   }
   const tick = () => {

@@ -341,13 +341,12 @@ func cmdPair(args []string) error {
 		return err
 	}
 	sid, _ := started["sid"].(string)
-	sas, _ := started["sas"].(string)
 	url, _ := started["qr_url"].(string)
 	via, _ := started["via"].(string)
 	if url == "" {
 		return fmt.Errorf("daemon did not return a pairing URL")
 	}
-	box, err := qrdisp.Box("Scan with the parent's phone — not the kid's.", url, "Code  "+spaced(sas))
+	box, err := qrdisp.Box("Scan with the parent's phone — not the kid's.", url, "Code appears after the phone offers its key")
 	if err != nil {
 		return err
 	}
@@ -356,7 +355,7 @@ func cmdPair(args []string) error {
 		"kind":   "pair",
 		"user":   "",
 		"cmd":    "Pair a parent phone",
-		"match":  sas,
+		"match":  "",
 		"qr_url": url,
 	})
 	defer dismissDisplay()
@@ -388,12 +387,19 @@ func cmdPair(args []string) error {
 		switch st["state"] {
 		case "pending_confirm":
 			name, _ := st["name"].(string)
+			sas, _ := st["sas"].(string)
 			if !prompted {
-				fmt.Printf("\nPhone %q wants to parent this machine.\n", name)
+				if name == "" {
+					name = "a phone"
+				}
+				fmt.Printf("\nPhone %q offered a key.\n", name)
+				if sas != "" {
+					fmt.Printf("Laptop code  %s  — this is bound to that phone's key.\n", spaced(sas))
+				}
 				if overlayOK {
-					fmt.Printf("Confirm the matching code  %s  on the phone, or press Y on the overlay.\n", spaced(sas))
+					fmt.Printf("Read the 6 digits off %s and type them on the overlay. A bare Y will not confirm.\n", name)
 				} else {
-					fmt.Printf("Confirm the matching code  %s  on the phone.\n", spaced(sas))
+					fmt.Printf("Confirm only if %s shows the same 6 digits. Confirm on the phone.\n", name)
 				}
 				prompted = true
 			}
@@ -460,7 +466,7 @@ func cmdPairConfirm(args []string) error {
 	if err := ensureDaemon(p.socket); err != nil {
 		return err
 	}
-	sid := pairSIDArg(args)
+	sid, sas := pairConfirmArgs(args)
 	if sid == "" {
 		st, err := daemon.Pending(p.socket)
 		if err != nil {
@@ -471,7 +477,10 @@ func cmdPairConfirm(args []string) error {
 	if sid == "" {
 		return fmt.Errorf("no pairing session")
 	}
-	done, err := daemon.PairConfirm(p.socket, sid)
+	if sas == "" {
+		return fmt.Errorf("type the 6-digit code from the phone (parentapproval pair-confirm SID CODE)")
+	}
+	done, err := daemon.PairConfirm(p.socket, sid, sas)
 	if err != nil {
 		return err
 	}
@@ -501,13 +510,46 @@ func cmdPairAbort(args []string) error {
 }
 
 func pairSIDArg(args []string) string {
+	sid, _ := pairConfirmArgs(args)
+	return sid
+}
+
+func pairConfirmArgs(args []string) (sid, sas string) {
+	var pos []string
 	for _, a := range args {
 		if a == "--dev" || strings.HasPrefix(a, "--") {
 			continue
 		}
-		return a
+		pos = append(pos, a)
 	}
-	return ""
+	if len(pos) == 0 {
+		return "", ""
+	}
+	if len(pos) == 1 {
+		if isPairSAS(pos[0]) {
+			return "", pos[0]
+		}
+		return pos[0], ""
+	}
+	if isPairSAS(pos[1]) {
+		return pos[0], pos[1]
+	}
+	if isPairSAS(pos[0]) {
+		return pos[1], pos[0]
+	}
+	return pos[0], pos[1]
+}
+
+func isPairSAS(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func cmdAsk(args []string) error {
@@ -517,6 +559,8 @@ func cmdAsk(args []string) error {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--user":
+			// Ignored unless the process is root: the daemon takes the
+			// username from SO_PEERCRED so a kid cannot spoof attribution.
 			i++
 			if i < len(args) {
 				userName = args[i]
@@ -564,10 +608,11 @@ func cmdPam() error {
 		return fmt.Errorf("parentapproval does not handle login (%s)", service)
 	}
 	cwd := readCwd(os.Getppid())
-	cmd := readCmdline(os.Getppid())
+	cmd := readCmdline(os.Getppid(), cwd)
 	polkit := service == "polkit-1" || service == "polkit"
 	if polkit {
-		if ok, err := daemon.RedeemService(p.socket, userName, "polkit"); err == nil && ok {
+		action, cookie := polkitRedeemIDs()
+		if ok, err := daemon.RedeemServiceAction(p.socket, userName, "polkit", action, cookie); err == nil && ok {
 			return nil
 		}
 	}
@@ -766,31 +811,64 @@ func onInterrupt(fn func()) {
 	}()
 }
 
-func compactCmdline(parts []string) string {
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
+func isLeadingWrapper(p string) bool {
+	switch filepath.Clean(p) {
+	case "sudo", "pkexec", cliName, "omarchy-parentapproval",
+		"/usr/bin/sudo", "/bin/sudo", "/usr/sbin/sudo", "/sbin/sudo",
+		"/usr/bin/pkexec", "/bin/pkexec",
+		"/usr/bin/" + cliName, "/usr/bin/omarchy-parentapproval":
+		return true
+	default:
+		return false
+	}
+}
+
+// compactCmdline strips only a leading sudo/pkexec/parentapproval invocation
+// (and a following "--"). A later argv whose basename is "sudo" is kept so a
+// kid cannot hide the program that will actually run.
+func compactCmdline(parts []string, cwd string) string {
+	i := 0
+	for i < len(parts) {
+		p := parts[i]
+		if p == "" || isLeadingWrapper(p) || p == "--" {
+			i++
+			continue
+		}
+		break
+	}
+	out := make([]string, 0, len(parts)-i)
+	for _, p := range parts[i:] {
 		if p == "" {
 			continue
 		}
-		base := filepath.Base(p)
-		if base == "sudo" || base == "pkexec" || base == cliName || base == "omarchy-parentapproval" {
-			continue
-		}
-		if p == "--" && len(out) == 0 {
-			continue
+		if len(out) == 0 {
+			p = displayProgram(p, cwd)
 		}
 		out = append(out, p)
 	}
 	return strings.Join(out, " ")
 }
 
-func readCmdline(pid int) string {
+func displayProgram(p, cwd string) string {
+	if p == "" || !strings.Contains(p, string(filepath.Separator)) {
+		return p
+	}
+	if !filepath.IsAbs(p) && cwd != "" {
+		p = filepath.Join(cwd, p)
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
+func readCmdline(pid int, cwd string) string {
 	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 	if err != nil {
 		return "(unknown command)"
 	}
 	parts := strings.Split(string(raw), "\x00")
-	if s := compactCmdline(parts); s != "" {
+	if s := compactCmdline(parts, cwd); s != "" {
 		return s
 	}
 	return strings.ReplaceAll(strings.TrimRight(string(raw), "\x00"), "\x00", " ")

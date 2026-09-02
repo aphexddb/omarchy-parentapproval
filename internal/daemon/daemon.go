@@ -76,7 +76,8 @@ type Daemon struct {
 
 	sockLn   net.Listener
 	relay    *relayClient
-	watchers []chan watchEvent
+	watchers    []chan watchEvent
+	watchNonces map[string]int64
 }
 
 type pairSession struct {
@@ -97,6 +98,8 @@ type oneShotGrant struct {
 	Inner   string
 	CWD     string
 	Service string
+	Action  string
+	Cookie  string
 	Exp     time.Time
 }
 
@@ -109,6 +112,8 @@ type Request struct {
 	Service string
 	CWD     string
 	Cmd     string
+	Action  string
+	Cookie  string
 	CmdHash []byte
 	QRURL   string
 
@@ -127,6 +132,9 @@ type sockReq struct {
 	CWD      string `json:"cwd,omitempty"`
 	Cmd      string `json:"cmd,omitempty"`
 	TTLS     int    `json:"ttl_s,omitempty"`
+	SAS      string `json:"sas,omitempty"`
+	Action   string `json:"action,omitempty"`
+	Cookie   string `json:"cookie,omitempty"`
 }
 
 func Open(cfg Config) (*Daemon, error) {
@@ -150,6 +158,7 @@ func Open(cfg Config) (*Daemon, error) {
 		requests:     map[string]*Request{},
 		byUser:       map[string]string{},
 		pushReadyIDs: map[string]bool{},
+		watchNonces:  map[string]int64{},
 	}
 	if cfg.RelayURL != "" {
 		d.relay = newRelayClient(d, cfg.RelayURL)
@@ -361,6 +370,37 @@ func adminOp(op string) bool {
 	}
 }
 
+// createUser is the identity shown on the phone. Unprivileged callers cannot
+// pick it: SO_PEERCRED is the unix peer, and pam_exec seteuid runs as the kid.
+// Root (uid 0) may still pass user, for a PAM helper that did not drop privs.
+func createUser(requested string, uid uint32, uidOK bool) (string, error) {
+	if !uidOK {
+		return "", errors.New("create requires a local unix connection")
+	}
+	if uid != 0 {
+		name, err := usernameForUID(uid)
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve calling user: %w", err)
+		}
+		return name, nil
+	}
+	if requested == "" {
+		return "", errors.New("user required")
+	}
+	return requested, nil
+}
+
+func usernameForUID(uid uint32) (string, error) {
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		return "", err
+	}
+	if u.Username == "" {
+		return "", errors.New("empty username")
+	}
+	return u.Username, nil
+}
+
 func authorizeAdminRPC(uid uint32, uidOK bool) error {
 	if !uidOK {
 		return errors.New("pairing and revoke require a local unix connection")
@@ -407,15 +447,19 @@ func (d *Daemon) dispatch(req sockReq, uid uint32, uidOK bool) (any, error) {
 	case "pair-status":
 		return d.PairStatus(req.SID)
 	case "pair-confirm":
-		return d.PairConfirm(req.SID)
+		return d.PairConfirm(req.SID, req.SAS)
 	case "pair-abort":
 		d.PairAbort(req.SID)
 		return map[string]string{"result": "cancel"}, nil
 	case "create":
-		return d.Create(req.User, req.Service, req.CWD, req.Cmd, req.TTLS)
+		userName, err := createUser(req.User, uid, uidOK)
+		if err != nil {
+			return nil, err
+		}
+		return d.Create(userName, req.Service, req.CWD, req.Cmd, req.TTLS, req.Action, req.Cookie)
 	case "redeem":
 		if req.Service != "" && req.Cmd == "" {
-			return map[string]any{"ok": d.RedeemService(req.User, req.Service)}, nil
+			return map[string]any{"ok": d.RedeemService(req.User, req.Service, req.Action, req.Cookie)}, nil
 		}
 		return map[string]any{"ok": d.Redeem(req.User, req.Cmd)}, nil
 	case "exec":
@@ -456,16 +500,34 @@ func randomHex(n int) string {
 }
 
 func randomDigits(n int) string {
-	const digits = "0123456789"
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	out := make([]byte, n)
-	for i := range out {
-		out[i] = digits[int(b[i])%10]
+	out := make([]byte, 0, n)
+	buf := make([]byte, 32)
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			panic(err)
+		}
+		out = append(out, takeUnbiasedDigits(buf, n-len(out))...)
 	}
 	return string(out)
+}
+
+// takeUnbiasedDigits maps bytes to decimal digits without modulo bias.
+// Values 250–255 are skipped (250 is the largest multiple of 10 in a byte).
+func takeUnbiasedDigits(src []byte, n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]byte, 0, n)
+	for _, v := range src {
+		if v >= 250 {
+			continue
+		}
+		out = append(out, '0'+v%10)
+		if len(out) == n {
+			return out
+		}
+	}
+	return out
 }
 
 func (d *Daemon) holdHTTPLocked() error {
@@ -506,12 +568,10 @@ func (d *Daemon) PairStart() (map[string]any, error) {
 	}
 	p := &pairSession{
 		SID: randomHex(16),
-		SAS: randomDigits(6),
 		Exp: time.Now().Add(time.Duration(protocol.DefaultPairTTL) * time.Second),
 	}
 	d.pairing = p
 	sid := p.SID
-	sas := p.SAS
 	exp := p.Exp
 	d.mu.Unlock()
 
@@ -557,7 +617,7 @@ func (d *Daemon) PairStart() (map[string]any, error) {
 	d.mu.Unlock()
 	return map[string]any{
 		"sid":    sid,
-		"sas":    sas,
+		"sas":    "",
 		"qr_url": url,
 		"exp":    exp.Unix(),
 		"listen": listen,
@@ -612,16 +672,20 @@ func (d *Daemon) PairStatus(sid string) (map[string]any, error) {
 	return map[string]any{"state": "waiting"}, nil
 }
 
-func (d *Daemon) PairConfirm(sid string) (map[string]any, error) {
+func (d *Daemon) PairConfirm(sid, sas string) (map[string]any, error) {
 	d.mu.Lock()
 	p := d.pairing
 	if p == nil || p.SID != sid {
 		d.mu.Unlock()
 		return nil, errors.New("no pairing session")
 	}
-	if p.Pending == nil {
+	if p.Pending == nil || p.SAS == "" {
 		d.mu.Unlock()
 		return nil, errors.New("no phone is waiting")
+	}
+	if sas == "" || sas != p.SAS {
+		d.mu.Unlock()
+		return nil, errors.New("type the 6-digit code from the phone")
 	}
 	parent := *p.Pending
 	d.mu.Unlock()
@@ -744,7 +808,7 @@ func (d *Daemon) WaitPush(deviceID string) (map[string]any, error) {
 	return map[string]any{"ready": false, "device_id": deviceID}, nil
 }
 
-func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]any, error) {
+func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int, action, cookie string) (map[string]any, error) {
 	if user == "" {
 		return nil, errors.New("user required")
 	}
@@ -777,6 +841,8 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 		Service: service,
 		CWD:     cwd,
 		Cmd:     cmd,
+		Action:  action,
+		Cookie:  cookie,
 		CmdHash: protocol.CmdHash(user, service, cwd, cmd),
 		done:    make(chan struct{}),
 	}
@@ -832,7 +898,7 @@ func (d *Daemon) Create(user, service, cwd, cmd string, ttlS int) (map[string]an
 	d.fanoutWatch(watchEvent{Kind: "ask", URL: url, RID: r.RID})
 	if d.relay != nil && via == "relay" {
 		title := "Parent Approval"
-		body := fmt.Sprintf("%s wants to run %s", r.User, r.Cmd)
+		body := "A privileged command is waiting for your approval."
 		go func() {
 			if err := d.relay.Notify("", title, body, url); err != nil {
 				log.Printf("relay notify: %v", err)
@@ -972,7 +1038,7 @@ func (d *Daemon) Redeem(user, cmd string) bool {
 	return false
 }
 
-func (d *Daemon) RedeemService(user, service string) bool {
+func (d *Daemon) RedeemService(user, service, action, cookie string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	g := d.grant
@@ -981,6 +1047,12 @@ func (d *Daemon) RedeemService(user, service string) bool {
 		return false
 	}
 	if user == "" || service == "" || g.User != user || g.Service != service {
+		return false
+	}
+	if g.Action != "" && g.Action != action {
+		return false
+	}
+	if g.Cookie != "" && g.Cookie != cookie {
 		return false
 	}
 	d.grant = nil
@@ -1045,19 +1117,39 @@ func (d *Daemon) Status() (map[string]any, error) {
 
 func (d *Daemon) requestJSON(r *Request) protocol.Request {
 	return protocol.Request{
-		V:        protocol.Version,
-		RID:      r.RID,
-		Nonce:    protocol.B64(r.Nonce),
-		Exp:      r.Exp.Unix(),
-		Match:    r.Match,
-		HostName: d.HostName(),
-		HostID:   d.HostID(),
-		User:     r.User,
-		Service:  r.Service,
-		CWD:      r.CWD,
-		Cmd:      r.Cmd,
-		CmdHash:  protocol.B64(r.CmdHash),
+		V:       protocol.Version,
+		RID:     r.RID,
+		Nonce:   protocol.B64(r.Nonce),
+		Exp:     r.Exp.Unix(),
+		Match:   r.Match,
+		HostID:  d.HostID(),
+		Service: r.Service,
+		CmdHash: protocol.B64(r.CmdHash),
+		Sealed:  d.sealAsk(r.User, r.CWD, r.Cmd),
 	}
+}
+
+func (d *Daemon) sealAsk(user, cwd, cmd string) map[string]string {
+	fields := protocol.AskFields{
+		User:     user,
+		CWD:      cwd,
+		Cmd:      cmd,
+		HostName: d.HostName(),
+	}
+	out := map[string]string{}
+	for _, p := range d.store.ListParents() {
+		raw, err := protocol.DecodeB64(p.PubKey)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			continue
+		}
+		blob, err := protocol.SealAsk(fields, ed25519.PublicKey(raw))
+		if err != nil {
+			log.Printf("seal ask for %s: %v", p.DeviceID, err)
+			continue
+		}
+		out[p.DeviceID] = blob
+	}
+	return out
 }
 
 func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
@@ -1119,8 +1211,8 @@ func (d *Daemon) serveIndex(w http.ResponseWriter, req *http.Request) {
 
 func (d *Daemon) handleWatch(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	if q.Get("host_id") == "" || q.Get("device_id") == "" || q.Get("sig") == "" || q.Get("exp") == "" {
-		http.Error(w, `{"error":"host_id, device_id, exp, sig required"}`, http.StatusBadRequest)
+	if q.Get("host_id") == "" || q.Get("device_id") == "" || q.Get("sig") == "" || q.Get("exp") == "" || q.Get("nonce") == "" {
+		http.Error(w, `{"error":"host_id, device_id, nonce, exp, sig required"}`, http.StatusBadRequest)
 		return
 	}
 	if !d.verifyWatchAuth(req) {
@@ -1157,9 +1249,10 @@ func (d *Daemon) verifyWatchAuth(req *http.Request) bool {
 	q := req.URL.Query()
 	hostID := strings.TrimSpace(q.Get("host_id"))
 	deviceID := strings.TrimSpace(q.Get("device_id"))
+	nonce := strings.TrimSpace(q.Get("nonce"))
 	sigB64 := strings.TrimSpace(q.Get("sig"))
 	exp, err := strconv.ParseInt(strings.TrimSpace(q.Get("exp")), 10, 64)
-	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" {
+	if err != nil || hostID == "" || deviceID == "" || sigB64 == "" || !protocol.ValidWatchNonce(nonce) {
 		return false
 	}
 	if hostID != d.HostID() || !protocol.WatchAuthFresh(exp, time.Now().Unix()) {
@@ -1177,7 +1270,12 @@ func (d *Daemon) verifyWatchAuth(req *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, exp), sig)
+	if !protocol.Verify(ed25519.PublicKey(pub), protocol.CanonicalWatch(hostID, deviceID, nonce, exp), sig) {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return protocol.ConsumeWatchNonce(d.watchNonces, deviceID, nonce, exp, time.Now().Unix())
 }
 
 func (d *Daemon) liveAskEventLocked() *watchEvent {
@@ -1343,6 +1441,8 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 			Inner:   protocol.StripLeadingSudo(r.Cmd),
 			CWD:     r.CWD,
 			Service: r.Service,
+			Action:  r.Action,
+			Cookie:  r.Cookie,
 			Exp:     time.Now().Add(45 * time.Second),
 		}
 	}
@@ -1358,6 +1458,7 @@ func (d *Daemon) handleDecision(w http.ResponseWriter, req *http.Request, rid st
 func (d *Daemon) handlePairPhoneConfirm(w http.ResponseWriter, req *http.Request, sid string) {
 	var body struct {
 		DeviceID string `json:"device_id"`
+		SAS      string `json:"sas"`
 	}
 	_ = json.NewDecoder(io.LimitReader(req.Body, 1<<12)).Decode(&body)
 	d.mu.Lock()
@@ -1373,7 +1474,7 @@ func (d *Daemon) handlePairPhoneConfirm(w http.ResponseWriter, req *http.Request
 		return
 	}
 	d.mu.Unlock()
-	done, err := d.PairConfirm(sid)
+	done, err := d.PairConfirm(sid, body.SAS)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusConflict)
 		return
@@ -1432,12 +1533,18 @@ func (d *Daemon) handlePairOffer(w http.ResponseWriter, req *http.Request, sid s
 		writeJSON(w, d.pairing.Done)
 		return
 	}
+	if d.pairing.Pending != nil {
+		http.Error(w, `{"error":"offer already pending"}`, http.StatusConflict)
+		return
+	}
+	pubB64 := protocol.B64(pub)
 	d.pairing.Pending = &store.Parent{
 		DeviceID:  body.DeviceID,
 		Name:      body.Name,
-		PubKey:    protocol.B64(pub),
+		PubKey:    pubB64,
 		CreatedAt: time.Now().UTC(),
 	}
+	d.pairing.SAS = protocol.PairSAS(d.pairing.SID, pubB64)
 	d.writePendingLocked()
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]any{"ok": true, "state": "pending_confirm", "sas": d.pairing.SAS})
@@ -1552,7 +1659,10 @@ func (d *Daemon) writePendingLocked() {
 		return
 	}
 	payload, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.WriteFile(path, payload, 0o644)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return
+	}
+	_ = os.Chmod(path, 0o600)
 }
 
 func (d *Daemon) clearPending() {
@@ -1622,8 +1732,8 @@ func PairStatus(socket, sid string) (map[string]any, error) {
 	return Call(socket, sockReq{Op: "pair-status", SID: sid})
 }
 
-func PairConfirm(socket, sid string) (map[string]any, error) {
-	return Call(socket, sockReq{Op: "pair-confirm", SID: sid})
+func PairConfirm(socket, sid, sas string) (map[string]any, error) {
+	return Call(socket, sockReq{Op: "pair-confirm", SID: sid, SAS: sas})
 }
 
 func PairAbort(socket, sid string) (map[string]any, error) {
@@ -1635,7 +1745,11 @@ func WaitPush(socket, deviceID string) (map[string]any, error) {
 }
 
 func Create(socket, user, service, cwd, cmd string, ttl int) (map[string]any, error) {
-	return Call(socket, sockReq{Op: "create", User: user, Service: service, CWD: cwd, Cmd: cmd, TTLS: ttl})
+	return CreateAction(socket, user, service, cwd, cmd, ttl, "", "")
+}
+
+func CreateAction(socket, user, service, cwd, cmd string, ttl int, action, cookie string) (map[string]any, error) {
+	return Call(socket, sockReq{Op: "create", User: user, Service: service, CWD: cwd, Cmd: cmd, TTLS: ttl, Action: action, Cookie: cookie})
 }
 
 func Redeem(socket, user, cmd string) (bool, error) {
@@ -1648,7 +1762,11 @@ func Redeem(socket, user, cmd string) (bool, error) {
 }
 
 func RedeemService(socket, user, service string) (bool, error) {
-	st, err := Call(socket, sockReq{Op: "redeem", User: user, Service: service})
+	return RedeemServiceAction(socket, user, service, "", "")
+}
+
+func RedeemServiceAction(socket, user, service, action, cookie string) (bool, error) {
+	st, err := Call(socket, sockReq{Op: "redeem", User: user, Service: service, Action: action, Cookie: cookie})
 	if err != nil {
 		return false, err
 	}
