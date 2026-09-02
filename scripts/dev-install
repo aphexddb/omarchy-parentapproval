@@ -29,9 +29,53 @@ if command -v omarchy >/dev/null; then
 fi
 rm -rf "$old_plugin" "$old_plugin.bak"
 
-if command -v omarchy-shell >/dev/null && command -v omarchy >/dev/null; then
-  omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
-  omarchy plugin enable parentapproval >/dev/null 2>&1 || true
+# Third-party overlays are off until they appear in shell.json plugins[].
+# omarchy-shell rescan is async, so a single `plugin enable` right after copy
+# returns unknown and used to be swallowed — pair then had no Hyprland QR.
+enable_overlay_plugin() {
+  local shell_json=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json
+  if [[ -f $shell_json ]] && command -v python3 >/dev/null; then
+    python3 - "$shell_json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+plugins = data.get("plugins")
+if not isinstance(plugins, list):
+    plugins = []
+    data["plugins"] = plugins
+ids = []
+for e in plugins:
+    ids.append(str(e.get("id", "") if isinstance(e, dict) else e))
+if "parentapproval" not in ids:
+    plugins.append({"id": "parentapproval"})
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+PY
+  fi
+  if ! command -v omarchy-shell >/dev/null || ! command -v omarchy >/dev/null; then
+    return 0
+  fi
+  local i
+  for i in 1 2 3 4 5 6; do
+    omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+    if omarchy plugin enable parentapproval >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.3
+  done
+  return 1
+}
+
+if ! enable_overlay_plugin; then
+  echo "dev-install: overlay plugin is installed but omarchy-shell did not enable it." >&2
+  echo "  Run:  omarchy plugin enable parentapproval && omarchy restart shell" >&2
+fi
+if [[ -f ${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json ]] &&
+   ! grep -q '"parentapproval"' "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"; then
+  echo "dev-install: shell.json is missing parentapproval — Hyprland QR will not show." >&2
+  exit 1
 fi
 
 echo

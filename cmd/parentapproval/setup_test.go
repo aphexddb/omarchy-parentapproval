@@ -275,3 +275,38 @@ func TestLinkSkillsRequiresHome(t *testing.T) {
 		t.Fatal("expected error for missing home")
 	}
 }
+
+func TestOverlayConfigHomeUsesSudoUser(t *testing.T) {
+	cur, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := geteuid
+	t.Cleanup(func() { geteuid = old })
+	geteuid = func() int { return 0 }
+	t.Setenv("SUDO_USER", cur.Username)
+	if got := overlayConfigHome(); got != cur.HomeDir {
+		t.Fatalf("got %q want %q", got, cur.HomeDir)
+	}
+}
+
+func TestDevInstallEnablesOverlayPlugin(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "dev-install"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		`plugins.append({"id": "parentapproval"})`,
+		"omarchy plugin enable parentapproval",
+		"Hyprland QR will not show",
+		"enable_overlay_plugin",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("dev-install missing %q", want)
+		}
+	}
+	if strings.Contains(s, "omarchy plugin enable parentapproval >/dev/null 2>&1 || true") {
+		t.Error("enable must not be swallowed; a disabled overlay has no pair QR")
+	}
+}

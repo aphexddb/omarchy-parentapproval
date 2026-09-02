@@ -129,6 +129,18 @@ func cmdSetupKid(args []string) error {
 	return nil
 }
 
+func overlayConfigHome() string {
+	if geteuid() == 0 {
+		if u := os.Getenv("SUDO_USER"); u != "" && u != "root" {
+			if usr, err := user.Lookup(u); err == nil && usr.HomeDir != "" {
+				return usr.HomeDir
+			}
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
 func cmdDoctor(args []string) error {
 	ok := true
 	check := func(cond bool, good, bad string) {
@@ -166,7 +178,7 @@ func cmdDoctor(args []string) error {
 	} else {
 		fmt.Println("warn kids sudoers not installed")
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home := overlayConfigHome(); home != "" {
 		plugin := filepath.Join(home, ".config", "omarchy", "plugins", "parentapproval", "manifest.json")
 		if _, err := os.Stat(plugin); err == nil {
 			raw, _ := os.ReadFile(filepath.Join(home, ".config", "omarchy", "shell.json"))
