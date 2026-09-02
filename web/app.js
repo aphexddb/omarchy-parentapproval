@@ -535,6 +535,50 @@ function renderHostList(el, recs) {
   }
 }
 
+async function clearAllRecords() {
+  const db = await idb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  try {
+    localStorage.removeItem("pa_rec");
+  } catch (e) {
+    /* private mode */
+  }
+  document.cookie = "pa_rec=; Max-Age=0; Path=/; Secure; SameSite=Lax";
+  stopWatch();
+}
+
+function showUnpairConfirm(recs) {
+  renderHostList($("unpair-host-list"), recs);
+  show("unpair-confirm");
+  const cancel = $("unpair-cancel-btn");
+  const confirmBtn = $("unpair-confirm-btn");
+  if (cancel) {
+    cancel.disabled = false;
+    cancel.onclick = () => {
+      showIdle(recs);
+    };
+  }
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.onclick = async () => {
+      confirmBtn.disabled = true;
+      if (cancel) cancel.disabled = true;
+      try {
+        await clearAllRecords();
+        await resumePaired();
+      } catch (err) {
+        confirmBtn.disabled = false;
+        if (cancel) cancel.disabled = false;
+      }
+    };
+  }
+}
+
 function showIdle(recs) {
   show("home");
   const msg = $("home-notify-msg");
@@ -547,6 +591,10 @@ function showIdle(recs) {
   $("home-paired").classList.toggle("hidden", !paired);
   if (!paired) return;
   renderHostList($("home-host-list"), recs);
+  const unpairBtn = $("unpair-btn");
+  if (unpairBtn) {
+    unpairBtn.onclick = () => showUnpairConfirm(recs);
+  }
   const rec = recs[0];
   wireHomeNotify(rec);
   if (notificationsGranted()) {

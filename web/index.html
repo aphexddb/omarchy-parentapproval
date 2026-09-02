@@ -49,6 +49,9 @@
         <div class="row" id="home-notify-row">
           <button class="primary" id="home-notify-btn" type="button">Enable notifications</button>
         </div>
+        <div class="row">
+          <button class="deny" id="unpair-btn" type="button">Unpair</button>
+        </div>
       </div>
     </section>
 
@@ -114,6 +117,19 @@
       <div class="row"><button class="primary" id="a2hs-done" type="button">I opened the icon</button></div>
     </section>
 
+    <section id="unpair-confirm" class="hidden">
+      <div class="eyebrow">Unpair</div>
+      <h1>Remove this phone?</h1>
+      <p class="lead">This deletes every parent key stored on this phone. You will need to pair again from each computer.</p>
+      <ul id="unpair-host-list" class="host-list"></ul>
+      <div class="row">
+        <button class="primary" id="unpair-cancel-btn" type="button">Keep paired</button>
+      </div>
+      <div class="row">
+        <button class="deny" id="unpair-confirm-btn" type="button">Unpair this phone</button>
+      </div>
+    </section>
+
     <section id="approve" class="hidden">
       <div class="eyebrow">Request from</div>
       <h1 id="host">laptop</h1>
@@ -145,6 +161,6 @@
   </main>
   <script src="/nacl.min.js" integrity="sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/"></script>
   <script src="/sha256.min.js" integrity="sha384-2hE+62EhDTI8GB1l6/KBZldM8qsy8CUJ/e5YlZaSbD6Bi4z0YhdrH2LCjDqYXAkg"></script>
-  <script src="/app.js?v=40"></script>
+  <script src="/app.js?v=41"></script>
 </body>
 </html>
