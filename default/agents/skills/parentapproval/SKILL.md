@@ -106,8 +106,9 @@ is set.
    `setup-kid`, or `sudo -u milo sudo pacman -S cowsay` from a kid session.
 2. No paired phone: `parentapproval status` then `sudo parentapproval pair`.
 3. Daemon down: `sudo parentapproval doctor` and `sudo systemctl start parentapprovald`.
-4. Relay disconnected: `status` should show the relay URL as connected. Check WAN.
-5. Keys paired in `--dev` but kid sudo uses the systemd daemon — re-pair with
+4. Fingerprint or FIDO was enabled after parentapproval: Omarchy's setup scripts prepend `auth sufficient` above our block. Re-run `sudo parentapproval apply-hooks`, then `doctor`.
+5. Relay disconnected: `status` should show the relay URL as connected. Check WAN.
+6. Keys paired in `--dev` but kid sudo uses the systemd daemon — re-pair with
    `sudo parentapproval pair` (no `--dev`).
 
 ## Relay

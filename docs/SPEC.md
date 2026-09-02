@@ -165,7 +165,7 @@ auth [success=1 default=ignore] pam_succeed_if.so quiet user notingroup omarchy-
 auth [success=done default=die] pam_exec.so seteuid stdout /usr/bin/parentapproval pam
 ```
 
-Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. This block must stay **above** `pam_fprintd` / `pam_u2f` so an enrolled kid print cannot sudo.
+Non-kids skip the helper and keep fingerprint / FIDO / password. Kids never fall through to `pam_unix`. The two auth lines live in `/etc/pam.d/parentapproval`; `sudo` and `polkit-1` `auth include` that file at the top. `apply-hooks` rewrites the include and re-hoists the include line so a later `1i auth sufficient pam_u2f.so` / `pam_fprintd.so` (Omarchy's fingerprint/FIDO setup scripts) does not win. `doctor` fails if any `auth sufficient` appears above the include. After enabling fingerprint or FIDO on a kid machine, re-run `sudo parentapproval apply-hooks`.
 
 Sudoers:
 

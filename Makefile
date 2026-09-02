@@ -51,6 +51,7 @@ install: check-root-install build
 	rm -f "$(DESTDIR)$(PREFIX)/lib/sysusers.d/omarchy-parentapproval.conf"
 	install -d -m 750 "$(DESTDIR)/etc/sudoers.d"
 	install -m 440 packaging/omarchy-kids.sudoers "$(DESTDIR)/etc/sudoers.d/omarchy-kids"
+	install -Dm644 packaging/parentapproval.pam "$(DESTDIR)/etc/pam.d/parentapproval"
 	install -Dm644 packaging/50-parentapproval.rules "$(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/50-parentapproval.rules"
 	install -Dm644 packaging/parentapproval-polkit.service "$(DESTDIR)$(PREFIX)/lib/systemd/user/parentapproval-polkit.service"
 	install -Dm644 LICENSE "$(DESTDIR)$(PREFIX)/share/licenses/parentapproval/LICENSE"
@@ -73,6 +74,7 @@ uninstall: check-root-uninstall
 		"$(PREFIX)/bin/$(BIN)" remove-hooks || true; \
 	fi
 	rm -f "$(DESTDIR)/etc/sudoers.d/omarchy-kids"
+	rm -f "$(DESTDIR)/etc/pam.d/parentapproval"
 	rm -f "$(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/50-parentapproval.rules"
 	rm -f "$(DESTDIR)$(PREFIX)/lib/systemd/user/parentapproval-polkit.service"
 	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BIN)" "$(DESTDIR)$(PREFIX)/bin/omarchy-parentapproval"

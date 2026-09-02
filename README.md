@@ -134,7 +134,7 @@ After a parent approves, the daemon runs that command as root. No sudo password.
 | `sudo parentapproval disable` | Remove PAM hooks without uninstalling |
 | `parentapproval status` | Host id, relay, paired phones |
 | `sudo parentapproval revoke DEVICE_ID` | Drop a phone |
-| `sudo parentapproval doctor` | Check PAM order, daemon, relay |
+| `sudo parentapproval doctor` | Check PAM order (including FIDO/fingerprint sufficient lines), daemon, relay |
 | `sudo parentapproval install-skills` | Symlink the agent skill (parent + all kids) |
 | `parentapproval daemon [--dev] [--relay URL]` | The service |
 
